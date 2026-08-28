@@ -53,11 +53,11 @@ function email(value) { return String(value || '').trim().toLowerCase(); }
 function otp() { return String(crypto.randomInt(100000, 1000000)); }
 function hash(value) { return crypto.createHash('sha256').update(String(value)).digest('hex'); }
 function appName(req) {
-  const raw = String(req.headers['x-indo-app-name'] || 'Indomark').trim().replace(/[<>"'`]/g, '');
+  const raw = String(req.headers['x-indo-app-name'] || 'Indomark').trim().replace(/[<>\"'`]/g, '');
   return raw ? raw.slice(0, 80) : 'Indomark';
 }
 function escapeHtml(value) {
-  return String(value || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+  return String(value || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('\"', '&quot;').replaceAll("'", '&#39;');
 }
 
 let zohoToken = null;
@@ -94,6 +94,15 @@ async function mailOtp(to, code, purpose, brand) {
     to,
     subject: `${brand} ${purpose} OTP`,
     content: `<div style="font-family:Arial,sans-serif;max-width:620px;margin:30px auto;background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.12)"><div style="background:#0b1020;color:#fff;padding:28px;text-align:center;font-size:28px;font-weight:800">⚡ ${safeBrand}</div><div style="padding:30px"><h2 style="margin:0 0 10px">Verify your email</h2><p style="font-size:16px;line-height:1.6">Use this code to continue with your ${safePurpose.toLowerCase()}.</p><div style="background:#f1f5f9;border:1px solid #dbe3ec;border-radius:16px;padding:20px;text-align:center;margin:24px 0"><div style="font-size:12px;color:#64748b;font-weight:700;letter-spacing:1.5px">YOUR OTP</div><div style="font-size:40px;letter-spacing:10px;font-weight:900;color:#16a36d;margin-top:8px">${code}</div></div><p style="color:#475569">This code expires in ${Math.round(OTP_TTL_MS / 60000)} minutes.</p><p style="background:#ecfdf5;padding:14px;border-radius:12px;color:#14532d"><strong>Security tip:</strong> Never share your OTP with anyone.</p></div><div style="background:#0b1020;color:#94a3b8;text-align:center;padding:18px;font-size:12px">Automated security email from ${safeBrand}.</div></div>`,
+  });
+}
+async function mailWelcome(to, name, brand) {
+  const safeBrand = escapeHtml(brand);
+  const safeName = escapeHtml(name || 'there');
+  await sendMail({
+    to,
+    subject: `Welcome to ${brand}! 🎉`,
+    content: `<div style="font-family:Arial,sans-serif;max-width:620px;margin:30px auto;background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.12)"><div style="background:#0b1020;color:#fff;padding:30px;text-align:center;font-size:30px;font-weight:800">⚡ ${safeBrand}</div><div style="padding:34px"><h1 style="margin:0 0 14px;color:#14213d">Welcome to ${safeBrand}! 🎉</h1><p style="font-size:17px;line-height:1.7;color:#334155;margin:0 0 8px">Hi ${safeName},</p><p style="font-size:16px;line-height:1.7;color:#475569">Your login was verified successfully. Welcome aboard — your ${safeBrand} account is ready to use.</p><div style="margin:26px 0;padding:20px;border:1px solid #bcead6;background:#ecfdf5;border-radius:16px"><div style="font-size:13px;font-weight:800;letter-spacing:.8px;color:#16865b;text-transform:uppercase">Account ready</div><div style="font-size:18px;font-weight:800;color:#14532d;margin-top:7px">You can now start using ${safeBrand}.</div></div><div style="text-align:center;margin:28px 0"><a href="https://indomark.github.io/Indomark/" style="display:inline-block;background:#16a36d;color:#fff;text-decoration:none;padding:14px 28px;border-radius:10px;font-weight:800">Open ${safeBrand}</a></div><hr style="border:0;border-top:1px solid #e2e8f0;margin:28px 0"><h3 style="color:#16865b;margin:0 0 12px">What you can do</h3><p style="color:#475569;line-height:1.8;margin:0">✓ Secure OTP-based login<br>✓ Manage your profile<br>✓ Explore market features<br>✓ Learn and practice investing</p><p style="font-size:12px;color:#64748b;line-height:1.6;margin-top:28px">If you did not log in to ${safeBrand}, please secure your account immediately.</p></div><div style="background:#0b1020;color:#94a3b8;text-align:center;padding:18px;font-size:12px">Automated security email from ${safeBrand}.</div></div>`,
   });
 }
 async function issueOtp(key, emailAddress, purpose, brand) {
@@ -141,7 +150,6 @@ async function main(req, res) {
 
     if (u.pathname === '/api/auth/signup/request-otp' && req.method === 'POST') {
       const e = email(body.email), name = String(body.name || '').trim();
-      // Firebase is the account authority; signup OTP only needs the name/email submitted by the client.
       if (!name || !/^\S+@\S+\.\S+$/.test(e)) return sendJson(res, 400, { error: 'Name and a valid email are required.' });
       await issueOtp(`signup:${e}`, e, 'signup', appName(req));
       return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.' });
@@ -156,7 +164,6 @@ async function main(req, res) {
     if (u.pathname === '/api/auth/login/request-otp' && req.method === 'POST') {
       const e = email(body.email);
       if (!/^\S+@\S+\.\S+$/.test(e)) return sendJson(res, 400, { error: 'Enter a valid email.' });
-      // No account/password lookup here. Firebase is the account authority.
       await issueOtp(`login:${e}`, e, 'login', appName(req));
       return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.' });
     }
@@ -164,6 +171,9 @@ async function main(req, res) {
     if (u.pathname === '/api/auth/login/verify-otp' && req.method === 'POST') {
       const e = email(body.email), verification = await verifyOtp(`login:${e}`, body.otp);
       if (verification.email !== e) return sendJson(res, 400, { error: 'OTP request mismatch.' });
+      const name = String(body.name || '').trim();
+      // Welcome email is a post-login notification; do not block successful verification if mail delivery fails.
+      void mailWelcome(e, name, appName(req)).catch((error) => console.error('Welcome email failed:', error));
       return sendJson(res, 200, { ok: true, verified: true, email: e });
     }
 
