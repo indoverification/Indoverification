@@ -95,6 +95,24 @@ async function mailOtp(to, code, purpose) {
     text: `Your IndoVerification OTP is ${code}. It expires in ${Math.round(OTP_TTL_MS / 60000)} minutes. Do not share this code with anyone.`,
   });
 }
+async function mailWelcome(to, name, event) {
+  const firstName = String(name || '').trim().split(/\s+/)[0] || 'there';
+  const isNewAccount = event === 'signup';
+  const subject = isNewAccount ? 'Welcome to IndoVerification' : 'Welcome back to IndoVerification';
+  const text = isNewAccount
+    ? `Hi ${firstName},\n\nWelcome to IndoVerification! Your account has been created successfully and your email has been verified.\n\nYou can now use your IndoVerification account to sign in securely with email OTP verification.\n\nIf you did not create this account, please contact support immediately.\n\nRegards,\nIndoVerification`
+    : `Hi ${firstName},\n\nWelcome back! You have successfully signed in to your IndoVerification account.\n\nFor your security, every login requires email OTP verification.\n\nIf this login was not you, please reset your password and contact support immediately.\n\nRegards,\nIndoVerification`;
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    to,
+    subject,
+    text,
+  });
+}
+async function safeMailWelcome(to, name, event) {
+  try { await mailWelcome(to, name, event); }
+  catch (error) { console.error(`Welcome email failed for ${to}:`, error); }
+}
 async function issueOtp(key, emailAddress, purpose) {
   const prev = await pool.query('SELECT sent_at FROM otp_codes WHERE otp_key=$1', [key]);
   const now = new Date();
@@ -172,6 +190,7 @@ async function main(req, res) {
       const user = { id: crypto.randomUUID(), email: e, name, password_salt: p.salt, password_hash: p.hash };
       await pool.query('INSERT INTO users (id,email,name,password_salt,password_hash,active) VALUES ($1,$2,$3,$4,$5,true)', [user.id, user.email, user.name, user.password_salt, user.password_hash]);
       const saved = { ...user, active: true };
+      await safeMailWelcome(e, name, 'signup');
       return sendJson(res, 201, { ok: true, token: tokenFor(saved), user: publicUser(saved) });
     }
 
@@ -192,6 +211,7 @@ async function main(req, res) {
       const user = result.rows[0];
       if (verification.email !== e || !user) return sendJson(res, 401, { error: 'Verification failed.' });
       requireActive(user);
+      await safeMailWelcome(e, user.name, 'login');
       return sendJson(res, 200, { ok: true, token: tokenFor(user), user: publicUser(user) });
     }
 
