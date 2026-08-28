@@ -35,6 +35,8 @@ async function mailOtp(to,code,purpose){await transporter.sendMail({from:process
 function issueOtp(key,emailAddress,purpose){const now=Date.now();const prev=otpStore.get(key);if(prev&&now-prev.sentAt<OTP_RESEND_MS)throw new Error('Please wait before requesting another OTP.');const code=otp();otpStore.set(key,{email:emailAddress,purpose,hash:hash(code),sentAt:now,expiresAt:now+OTP_TTL_MS,attempts:0});return code}
 function verifyOtp(key,value){const item=otpStore.get(key);if(!item)throw new Error('OTP not found or expired.');if(Date.now()>item.expiresAt){otpStore.delete(key);throw new Error('OTP expired.');}if(item.attempts>=OTP_MAX_ATTEMPTS){otpStore.delete(key);throw new Error('Too many incorrect attempts.');}if(hash(String(value||''))!==item.hash){item.attempts+=1;throw new Error('Invalid OTP.')}otpStore.delete(key);return item}
 function tokenFor(user){return jwt.sign({sub:user.id,email:user.email},JWT_SECRET,{expiresIn:'7d',issuer:'IndoVerification'})}
+function authUser(req,users){const header=String(req.headers.authorization||'');if(!header.startsWith('Bearer '))throw new Error('Authorization required.');let payload;try{payload=jwt.verify(header.slice(7),JWT_SECRET,{issuer:'IndoVerification'})}catch{throw new Error('Invalid or expired session.')}const user=Object.values(users).find(u=>u.id===payload.sub&&u.email===payload.email);if(!user)throw new Error('Account not found.');return user}
+function requireActive(user){if(user.active===false)throw new Error('Account is inactive.');}
 
 async function main(req,res){setCors(res);if(req.method==='OPTIONS')return sendJson(res,204,{});const u=new URL(req.url||'/',`http://${req.headers.host||'localhost'}`);try{
  if(u.pathname==='/health'&&req.method==='GET')return sendJson(res,200,{ok:true,service:'IndoVerification',time:new Date().toISOString()});
@@ -43,17 +45,38 @@ async function main(req,res){setCors(res);if(req.method==='OPTIONS')return sendJ
   const e=email(body.email),name=String(body.name||'').trim(),password=String(body.password||'');if(!name||!/^\S+@\S+\.\S+$/.test(e)||password.length<8)return sendJson(res,400,{error:'Name, valid email and password (8+ chars) are required.'});if(users[e])return sendJson(res,409,{error:'Account already exists.'});const code=issueOtp(`signup:${e}`,e,'signup');await mailOtp(e,code,'signup verification');return sendJson(res,200,{ok:true,message:'OTP sent to your email.'});
  }
  if(u.pathname==='/api/auth/signup/verify-otp'&&req.method==='POST'){
-  const e=email(body.email),verification=verifyOtp(`signup:${e}`,body.otp),name=String(body.name||'').trim(),password=String(body.password||'');if(verification.email!==e)return sendJson(res,400,{error:'OTP request mismatch.'});if(!name||password.length<8)return sendJson(res,400,{error:'Invalid signup data.'});const p=passwordHash(password),user={id:crypto.randomUUID(),email:e,name,createdAt:new Date().toISOString(),password:p};users[e]=user;await writeUsers(users);return sendJson(res,201,{ok:true,token:tokenFor(user),user:{id:user.id,email:e,name}});
+  const e=email(body.email),verification=verifyOtp(`signup:${e}`,body.otp),name=String(body.name||'').trim(),password=String(body.password||'');if(verification.email!==e)return sendJson(res,400,{error:'OTP request mismatch.'});if(!name||password.length<8)return sendJson(res,400,{error:'Invalid signup data.'});const p=passwordHash(password),user={id:crypto.randomUUID(),email:e,name,createdAt:new Date().toISOString(),password:p,active:true};users[e]=user;await writeUsers(users);return sendJson(res,201,{ok:true,token:tokenFor(user),user:{id:user.id,email:e,name,active:true}});
  }
  if(u.pathname==='/api/auth/login/request-otp'&&req.method==='POST'){
-  const e=email(body.email),password=String(body.password||''),user=users[e];if(!user||!passwordOk(password,user.password))return sendJson(res,401,{error:'Invalid email or password.'});const code=issueOtp(`login:${e}`,e,'login');await mailOtp(e,code,'login verification');return sendJson(res,200,{ok:true,message:'OTP sent to your email.'});
+  const e=email(body.email),password=String(body.password||''),user=users[e];if(!user||!passwordOk(password,user.password))return sendJson(res,401,{error:'Invalid email or password.'});if(user.active===false)return sendJson(res,403,{error:'Account is inactive. Activate the account before logging in.'});const code=issueOtp(`login:${e}`,e,'login');await mailOtp(e,code,'login verification');return sendJson(res,200,{ok:true,message:'OTP sent to your email.'});
  }
  if(u.pathname==='/api/auth/login/verify-otp'&&req.method==='POST'){
-  const e=email(body.email),v=verifyOtp(`login:${e}`,body.otp),user=users[e];if(v.email!==e||!user)return sendJson(res,401,{error:'Verification failed.'});return sendJson(res,200,{ok:true,token:tokenFor(user),user:{id:user.id,email:e,name:user.name}});
+  const e=email(body.email),v=verifyOtp(`login:${e}`,body.otp),user=users[e];if(v.email!==e||!user)return sendJson(res,401,{error:'Verification failed.'});requireActive(user);return sendJson(res,200,{ok:true,token:tokenFor(user),user:{id:user.id,email:e,name:user.name,active:user.active!==false}});
  }
  if(u.pathname==='/api/auth/resend-otp'&&req.method==='POST'){
-  const e=email(body.email),purpose=String(body.purpose||'signup');if(!['signup','login'].includes(purpose))return sendJson(res,400,{error:'Invalid OTP purpose.'});const user=users[e];if(purpose==='signup'&&user)return sendJson(res,409,{error:'Account already exists.'});if(purpose==='login'&&!user)return sendJson(res,404,{error:'Account not found.'});const code=issueOtp(`${purpose}:${e}`,e,purpose);await mailOtp(e,code,purpose);return sendJson(res,200,{ok:true,message:'OTP resent.'});
+  const e=email(body.email),purpose=String(body.purpose||'signup');if(!['signup','login'].includes(purpose))return sendJson(res,400,{error:'Invalid OTP purpose.'});const user=users[e];if(purpose==='signup'&&user)return sendJson(res,409,{error:'Account already exists.'});if(purpose==='login'&&(!user||user.active===false))return sendJson(res,404,{error:'Account not available for login.'});const code=issueOtp(`${purpose}:${e}`,e,purpose);await mailOtp(e,code,purpose);return sendJson(res,200,{ok:true,message:'OTP resent.'});
+ }
+
+ // OTP-protected account actions. The current session identifies the account;
+ // the OTP is the second factor required before changing its state.
+ const actionMatch=u.pathname.match(/^\/api\/account\/(activate|deactivate|delete)\/(request-otp|verify-otp)$/);
+ if(actionMatch&&req.method==='POST'){
+  const action=actionMatch[1],step=actionMatch[2],user=authUser(req,users),key=`account:${user.id}:${action}`;
+  if(step==='request-otp'){
+   const code=issueOtp(key,user.email,action);await mailOtp(user.email,code,`${action} account`);return sendJson(res,200,{ok:true,message:'OTP sent to your email.'});
+  }
+  const verification=verifyOtp(key,body.otp);if(verification.email!==user.email)return sendJson(res,400,{error:'OTP request mismatch.'});
+  if(action==='activate'){user.active=true;await writeUsers(users);return sendJson(res,200,{ok:true,message:'Account activated.',active:true});}
+  if(action==='deactivate'){user.active=false;await writeUsers(users);return sendJson(res,200,{ok:true,message:'Account deactivated.',active:false});}
+  delete users[user.email];await writeUsers(users);return sendJson(res,200,{ok:true,message:'Account permanently deleted.'});
+ }
+
+ if(u.pathname==='/api/auth/forgot-password/request-otp'&&req.method==='POST'){
+  const e=email(body.email),user=users[e];if(!user)return sendJson(res,404,{error:'Account not found.'});const code=issueOtp(`forgot:${e}`,e,'password reset');await mailOtp(e,code,'password reset');return sendJson(res,200,{ok:true,message:'OTP sent to your email.'});
+ }
+ if(u.pathname==='/api/auth/forgot-password/verify-otp'&&req.method==='POST'){
+  const e=email(body.email),password=String(body.newPassword||'');if(password.length<8)return sendJson(res,400,{error:'New password must be at least 8 characters.'});const verification=verifyOtp(`forgot:${e}`,body.otp),user=users[e];if(verification.email!==e||!user)return sendJson(res,400,{error:'Verification failed.'});user.password=passwordHash(password);await writeUsers(users);return sendJson(res,200,{ok:true,message:'Password reset successfully.'});
  }
  return sendJson(res,404,{error:'Not found'});
-}catch(error){console.error(error);return sendJson(res,500,{error:error instanceof Error?error.message:'Server error'})}}
+}catch(error){console.error(error);const status=error.message.includes('Authorization')||error.message.includes('session')?401:error.message.includes('OTP')||error.message.includes('account')?400:500;return sendJson(res,status,{error:error instanceof Error?error.message:'Server error'})}}
 http.createServer(main).listen(PORT,HOST,()=>console.log(`IndoVerification listening on ${HOST}:${PORT}`));
