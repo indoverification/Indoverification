@@ -18,7 +18,7 @@ const ZOHO_CLIENT_ID = String(process.env.ZOHO_CLIENT_ID || '').trim();
 const ZOHO_CLIENT_SECRET = String(process.env.ZOHO_CLIENT_SECRET || '').trim();
 const ZOHO_REFRESH_TOKEN = String(process.env.ZOHO_REFRESH_TOKEN || '').trim();
 const ZOHO_ACCOUNT_ID = String(process.env.ZOHO_ACCOUNT_ID || '').trim();
-const ZOHO_FROM = String(process.env.ZOHO_FROM || process.env.SMTP_FROM || '').trim();
+const ZOHO_FROM = String(process.env.ZOHO_FROM || '').trim();
 
 if (!JWT_SECRET) { console.error('JWT_SECRET is required.'); process.exit(1); }
 if (!DATABASE_URL) { console.error('DATABASE_URL is required.'); process.exit(1); }
@@ -147,6 +147,16 @@ async function issueOtp(key, emailAddress, purpose) {
   );
   return code;
 }
+async function issueAndSendOtp(key, emailAddress, purpose, mailPurpose = purpose) {
+  const code = await issueOtp(key, emailAddress, purpose);
+  try {
+    await mailOtp(emailAddress, code, mailPurpose);
+    return code;
+  } catch (error) {
+    await pool.query('DELETE FROM otp_codes WHERE otp_key=$1', [key]).catch(() => {});
+    throw error;
+  }
+}
 async function verifyOtp(key, value) {
   const result = await pool.query('SELECT * FROM otp_codes WHERE otp_key=$1', [key]);
   const item = result.rows[0];
@@ -217,8 +227,7 @@ async function main(req, res) {
       if (!name || !/^\S+@\S+\.\S+$/.test(e) || password.length < 8) return sendJson(res, 400, { error: 'Name, valid email and password (8+ chars) are required.' });
       const existing = await pool.query('SELECT 1 FROM users WHERE email=$1', [e]);
       if (existing.rowCount) return sendJson(res, 409, { error: 'Account already exists.' });
-      const code = await issueOtp(`signup:${e}`, e, 'signup');
-      await mailOtp(e, code, 'signup verification');
+      await issueAndSendOtp(`signup:${e}`, e, 'signup', 'signup verification');
       return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.' });
     }
 
@@ -239,8 +248,7 @@ async function main(req, res) {
       const user = result.rows[0];
       if (!user || !passwordOk(password, { salt: user.password_salt, hash: user.password_hash })) return sendJson(res, 401, { error: 'Invalid email or password.' });
       requireActive(user);
-      const code = await issueOtp(`login:${e}`, e, 'login');
-      await mailOtp(e, code, 'login verification');
+      await issueAndSendOtp(`login:${e}`, e, 'login', 'login verification');
       return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.' });
     }
 
@@ -261,8 +269,7 @@ async function main(req, res) {
       const user = result.rows[0];
       if (purpose === 'signup' && user) return sendJson(res, 409, { error: 'Account already exists.' });
       if (purpose === 'login' && (!user || user.active === false)) return sendJson(res, 404, { error: 'Account not available for login.' });
-      const code = await issueOtp(`${purpose}:${e}`, e, purpose);
-      await mailOtp(e, code, purpose);
+      await issueAndSendOtp(`${purpose}:${e}`, e, purpose);
       return sendJson(res, 200, { ok: true, message: 'OTP resent.' });
     }
 
@@ -270,8 +277,7 @@ async function main(req, res) {
     if (actionMatch && req.method === 'POST') {
       const action = actionMatch[1], step = actionMatch[2], user = await authUser(req), key = `account:${user.id}:${action}`;
       if (step === 'request-otp') {
-        const code = await issueOtp(key, user.email, action);
-        await mailOtp(user.email, code, `${action} account`);
+        await issueAndSendOtp(key, user.email, action, `${action} account`);
         return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.' });
       }
       const verification = await verifyOtp(key, body.otp);
@@ -291,8 +297,7 @@ async function main(req, res) {
     if (u.pathname === '/api/auth/forgot-password/request-otp' && req.method === 'POST') {
       const e = email(body.email), result = await pool.query('SELECT 1 FROM users WHERE email=$1', [e]);
       if (!result.rowCount) return sendJson(res, 404, { error: 'Account not found.' });
-      const code = await issueOtp(`forgot:${e}`, e, 'password reset');
-      await mailOtp(e, code, 'password reset');
+      await issueAndSendOtp(`forgot:${e}`, e, 'password reset', 'password reset');
       return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.' });
     }
 
@@ -311,7 +316,7 @@ async function main(req, res) {
   } catch (error) {
     console.error(error);
     const message = error instanceof Error ? error.message : 'Server error';
-    const status = /Authorization|required|session/i.test(message) ? 401 : /already exists/i.test(message) ? 409 : /OTP|account|password|Zoho Mail API/i.test(message) ? 400 : 500;
+    const status = /Authorization|required|session/i.test(message) ? 401 : /already exists/i.test(message) ? 409 : /OTP|account|password|Zoho Mail API|Zoho token|Zoho Mail send/i.test(message) ? 400 : 500;
     return sendJson(res, status, { error: message });
   }
 }
