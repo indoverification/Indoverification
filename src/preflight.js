@@ -1,8 +1,12 @@
 import 'dotenv/config';
 
+// Railway workaround: use a uniquely named service variable for the Zoho
+// refresh token and map it into the variable name expected by server.js.
+if (!String(process.env.ZOHO_REFRESH_TOKEN || '').trim() && String(process.env.ZOHO_OAUTH_REFRESH_TOKEN || '').trim()) {
+  process.env.ZOHO_REFRESH_TOKEN = String(process.env.ZOHO_OAUTH_REFRESH_TOKEN).trim();
+}
+
 // Only infrastructure-critical variables must exist for the API process to boot.
-// Zoho credentials are validated when an email is actually requested so a bad
-// email configuration cannot take the whole authentication API offline.
 const required = ['JWT_SECRET', 'DATABASE_URL'];
 const missing = required.filter((key) => !String(process.env[key] || '').trim());
 
