@@ -140,9 +140,9 @@ async function main(req, res) {
     const body = await readBody(req);
 
     if (u.pathname === '/api/auth/signup/request-otp' && req.method === 'POST') {
-      const e = email(body.email), name = String(body.name || '').trim(), password = String(body.password || '');
-      if (!name || !/^\S+@\S+\.\S+$/.test(e) || password.length < 8) return sendJson(res, 400, { error: 'Name, valid email and password (8+ chars) are required.' });
-      // No Firebase account lookup here. Railway is only the OTP service.
+      const e = email(body.email), name = String(body.name || '').trim();
+      // Firebase is the account authority; signup OTP only needs the name/email submitted by the client.
+      if (!name || !/^\S+@\S+\.\S+$/.test(e)) return sendJson(res, 400, { error: 'Name and a valid email are required.' });
       await issueOtp(`signup:${e}`, e, 'signup', appName(req));
       return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.' });
     }
