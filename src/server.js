@@ -50,7 +50,9 @@ async function readBody(req) {
   try { return JSON.parse(raw); } catch { throw new Error('Invalid JSON'); }
 }
 function email(value) { return String(value || '').trim().toLowerCase(); }
+function normalizeOtp(value) { return String(value || '').normalize('NFKC').replace(/[^0-9]/g, '').slice(0, 6); }
 function otp() { return String(crypto.randomInt(100000, 1000000)); }
+function challengeId() { return crypto.randomBytes(24).toString('hex'); }
 function hash(value) { return crypto.createHash('sha256').update(String(value)).digest('hex'); }
 function appName(req) {
   const raw = String(req.headers['x-indo-app-name'] || 'Indomark').trim().replace(/[<>\"'`]/g, '');
@@ -58,6 +60,10 @@ function appName(req) {
 }
 function escapeHtml(value) {
   return String(value || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('\"', '&quot;').replaceAll("'", '&#39;');
+}
+function emailShell({ brand, title, subtitle, body }) {
+  const safeBrand = escapeHtml(brand);
+  return `<!doctype html><html><body style="margin:0;background:#f4f7fb;font-family:Arial,Helvetica,sans-serif;color:#18212f"><div style="max-width:640px;margin:30px auto;background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 12px 32px rgba(15,23,42,.12)"><div style="background:#0b1020;padding:28px 24px;text-align:center"><div style="font-size:30px;font-weight:800;color:#fff">⚡ <span>${safeBrand}</span></div><div style="margin-top:8px;color:#94a3b8;font-size:14px">${escapeHtml(subtitle || title)}</div></div><div style="padding:34px 28px">${body}</div><div style="background:#0b1020;color:#94a3b8;padding:18px 24px;text-align:center;font-size:12px">This is an automated email from ${safeBrand}.<br>© ${new Date().getFullYear()} ${safeBrand}</div></div></body></html>`;
 }
 
 let zohoToken = null;
@@ -90,43 +96,28 @@ async function sendMail({ to, subject, content }) {
 async function mailOtp(to, code, purpose, brand) {
   const safeBrand = escapeHtml(brand);
   const safePurpose = escapeHtml(purpose);
-  await sendMail({
-    to,
-    subject: `${brand} ${purpose} OTP`,
-    content: `<div style="font-family:Arial,sans-serif;max-width:620px;margin:30px auto;background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.12)"><div style="background:#0b1020;color:#fff;padding:28px;text-align:center;font-size:28px;font-weight:800">⚡ ${safeBrand}</div><div style="padding:30px"><h2 style="margin:0 0 10px">Verify your email</h2><p style="font-size:16px;line-height:1.6">Use this code to continue with your ${safePurpose.toLowerCase()}.</p><div style="background:#f1f5f9;border:1px solid #dbe3ec;border-radius:16px;padding:20px;text-align:center;margin:24px 0"><div style="font-size:12px;color:#64748b;font-weight:700;letter-spacing:1.5px">YOUR OTP</div><div style="font-size:40px;letter-spacing:10px;font-weight:900;color:#16a36d;margin-top:8px">${code}</div></div><p style="color:#475569">This code expires in ${Math.round(OTP_TTL_MS / 60000)} minutes.</p><p style="background:#ecfdf5;padding:14px;border-radius:12px;color:#14532d"><strong>Security tip:</strong> Never share your OTP with anyone.</p></div><div style="background:#0b1020;color:#94a3b8;text-align:center;padding:18px;font-size:12px">Automated security email from ${safeBrand}.</div></div>`,
+  const content = emailShell({
+    brand,
+    title: 'Verify your email',
+    subtitle: 'Secure account verification',
+    body: `<h2 style="margin:0 0 10px">Verify your email</h2><p style="font-size:16px;line-height:1.6">Use this code to continue with your ${safePurpose.toLowerCase()}.</p><div style="background:#f1f5f9;border:1px solid #dbe3ec;border-radius:16px;padding:24px;text-align:center;margin:24px 0"><div style="font-size:13px;color:#64748b;font-weight:700;letter-spacing:1.6px;text-transform:uppercase">Your OTP</div><div style="font-size:42px;letter-spacing:10px;font-weight:900;color:#16a36d;margin-top:10px">${escapeHtml(code)}</div></div><p style="color:#475569">This code expires in ${Math.round(OTP_TTL_MS / 60000)} minutes.</p><p style="background:#ecfdf5;border:1px solid #a7f3d0;padding:14px;border-radius:12px;color:#14532d"><strong>Security tip:</strong> Never share this OTP with anyone.</p><p style="font-size:12px;color:#64748b;margin-top:24px">Automated security email from ${safeBrand}.</p>`,
   });
+  await sendMail({ to, subject: `${brand} ${purpose} OTP`, content });
 }
 async function mailWelcome(to, name, brand) {
   const safeBrand = escapeHtml(brand);
   const safeName = escapeHtml(name || 'there');
-  await sendMail({
-    to,
-    subject: `Welcome to ${brand}! 🎉`,
-    content: `<div style="font-family:Arial,sans-serif;max-width:620px;margin:30px auto;background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.12)"><div style="background:#0b1020;color:#fff;padding:30px;text-align:center;font-size:30px;font-weight:800">⚡ ${safeBrand}</div><div style="padding:34px"><h1 style="margin:0 0 14px;color:#14213d">Welcome to ${safeBrand}! 🎉</h1><p style="font-size:17px;line-height:1.7;color:#334155;margin:0 0 8px">Hi ${safeName},</p><p style="font-size:16px;line-height:1.7;color:#475569">Your login was verified successfully. Welcome aboard — your ${safeBrand} account is ready to use.</p><div style="margin:26px 0;padding:20px;border:1px solid #bcead6;background:#ecfdf5;border-radius:16px"><div style="font-size:13px;font-weight:800;letter-spacing:.8px;color:#16865b;text-transform:uppercase">Account ready</div><div style="font-size:18px;font-weight:800;color:#14532d;margin-top:7px">You can now start using ${safeBrand}.</div></div><div style="text-align:center;margin:28px 0"><a href="https://indomark.github.io/Indomark/" style="display:inline-block;background:#16a36d;color:#fff;text-decoration:none;padding:14px 28px;border-radius:10px;font-weight:800">Open ${safeBrand}</a></div><hr style="border:0;border-top:1px solid #e2e8f0;margin:28px 0"><h3 style="color:#16865b;margin:0 0 12px">What you can do</h3><p style="color:#475569;line-height:1.8;margin:0">✓ Secure OTP-based login<br>✓ Manage your profile<br>✓ Explore market features<br>✓ Learn and practice investing</p><p style="font-size:12px;color:#64748b;line-height:1.6;margin-top:28px">If you did not log in to ${safeBrand}, please secure your account immediately.</p><p style="font-size:13px;color:#475569;line-height:1.6;margin-top:18px">Need help? Contact support at <a href="mailto:indomark@zohomail.in" style="color:#16865b;font-weight:700;text-decoration:none">indomark@zohomail.in</a></p></div><div style="background:#0b1020;color:#94a3b8;text-align:center;padding:18px;font-size:12px">Automated security email from ${safeBrand}.</div></div>`,
+  const content = emailShell({
+    brand,
+    title: `Welcome to ${brand}!`,
+    subtitle: 'Welcome to your account',
+    body: `<h1 style="margin:0 0 14px;color:#14213d">Welcome to ${safeBrand}! 🎉</h1><p style="font-size:17px;line-height:1.7;color:#334155;margin:0 0 8px">Hi ${safeName},</p><p style="font-size:16px;line-height:1.7;color:#475569">Your login was verified successfully. Welcome aboard — your ${safeBrand} account is ready to use.</p><div style="margin:26px 0;padding:20px;border:1px solid #bcead6;background:#ecfdf5;border-radius:16px"><div style="font-size:13px;font-weight:800;letter-spacing:.8px;color:#16865b;text-transform:uppercase">Account ready</div><div style="font-size:18px;font-weight:800;color:#14532d;margin-top:7px">You can now start using ${safeBrand}.</div></div><div style="text-align:center;margin:28px 0"><a href="https://indomark.github.io/Indomark/" style="display:inline-block;background:#16a36d;color:#fff;text-decoration:none;padding:14px 28px;border-radius:10px;font-weight:800">Open ${safeBrand}</a></div><hr style="border:0;border-top:1px solid #e2e8f0;margin:28px 0"><p style="font-size:13px;color:#475569;line-height:1.6">Need help? Contact support at <a href="mailto:indomark@zohomail.in" style="color:#16865b;font-weight:700;text-decoration:none">indomark@zohomail.in</a></p>`,
   });
+  await sendMail({ to, subject: `Welcome to ${brand}! 🎉`, content });
 }
-async function issueOtp(key, emailAddress, purpose, brand) {
-  const previous = await pool.query('SELECT sent_at FROM otp_codes WHERE otp_key=$1', [key]);
-  const now = new Date();
-  if (previous.rows[0] && now.getTime() - new Date(previous.rows[0].sent_at).getTime() < OTP_RESEND_MS) throw new Error('Please wait before requesting another OTP.');
-  const code = otp();
-  await pool.query(`INSERT INTO otp_codes (otp_key,email,purpose,code_hash,sent_at,expires_at,attempts) VALUES ($1,$2,$3,$4,$5,$6,0) ON CONFLICT (otp_key) DO UPDATE SET email=EXCLUDED.email,purpose=EXCLUDED.purpose,code_hash=EXCLUDED.code_hash,sent_at=EXCLUDED.sent_at,expires_at=EXCLUDED.expires_at,attempts=0`, [key, emailAddress, purpose, hash(code), now, new Date(now.getTime() + OTP_TTL_MS)]);
-  try { await mailOtp(emailAddress, code, purpose === 'signup' ? 'account creation' : 'login verification', brand); }
-  catch (error) { await pool.query('DELETE FROM otp_codes WHERE otp_key=$1', [key]).catch(() => {}); throw error; }
-}
-async function verifyOtp(key, value) {
-  const result = await pool.query('SELECT * FROM otp_codes WHERE otp_key=$1', [key]);
-  const item = result.rows[0];
-  if (!item) throw new Error('OTP not found or expired.');
-  if (Date.now() > new Date(item.expires_at).getTime()) { await pool.query('DELETE FROM otp_codes WHERE otp_key=$1', [key]); throw new Error('OTP expired.'); }
-  if (item.attempts >= OTP_MAX_ATTEMPTS) { await pool.query('DELETE FROM otp_codes WHERE otp_key=$1', [key]); throw new Error('Too many incorrect attempts.'); }
-  if (hash(value) !== item.code_hash) { await pool.query('UPDATE otp_codes SET attempts=attempts+1 WHERE otp_key=$1', [key]); throw new Error('Invalid OTP.'); }
-  await pool.query('DELETE FROM otp_codes WHERE otp_key=$1', [key]);
-  return item;
-}
+
 async function initDb() {
   await pool.query(`
-    DROP TABLE IF EXISTS users;
     CREATE TABLE IF NOT EXISTS otp_codes (
       otp_key TEXT PRIMARY KEY,
       email TEXT NOT NULL,
@@ -136,7 +127,44 @@ async function initDb() {
       expires_at TIMESTAMPTZ NOT NULL,
       attempts INTEGER NOT NULL DEFAULT 0
     );
+    ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS challenge_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS otp_codes_challenge_id_uq ON otp_codes(challenge_id) WHERE challenge_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS otp_codes_email_purpose_sent_idx ON otp_codes(email, purpose, sent_at DESC);
+    DELETE FROM otp_codes WHERE expires_at < NOW();
   `);
+}
+async function issueOtp(emailAddress, purpose, brand) {
+  const latest = await pool.query('SELECT sent_at FROM otp_codes WHERE email=$1 AND purpose=$2 ORDER BY sent_at DESC LIMIT 1', [emailAddress, purpose]);
+  const now = new Date();
+  if (latest.rows[0] && now.getTime() - new Date(latest.rows[0].sent_at).getTime() < OTP_RESEND_MS) {
+    throw new Error('Please wait before requesting another OTP.');
+  }
+  const code = otp();
+  const id = challengeId();
+  await pool.query('INSERT INTO otp_codes (otp_key,email,purpose,code_hash,sent_at,expires_at,attempts,challenge_id) VALUES ($1,$2,$3,$4,$5,$6,0,$7)', [id, emailAddress, purpose, hash(code), now, new Date(now.getTime() + OTP_TTL_MS), id]);
+  try {
+    await mailOtp(emailAddress, code, purpose === 'signup' ? 'Account creation' : 'Login verification', brand);
+  } catch (error) {
+    await pool.query('DELETE FROM otp_codes WHERE otp_key=$1', [id]).catch(() => {});
+    throw error;
+  }
+  return id;
+}
+async function verifyOtp(challenge, emailAddress, value) {
+  const key = String(challenge || '').trim();
+  if (!key) throw new Error('OTP challenge is required.');
+  const result = await pool.query('SELECT * FROM otp_codes WHERE challenge_id=$1 AND email=$2 LIMIT 1', [key, emailAddress]);
+  const item = result.rows[0];
+  if (!item) throw new Error('OTP not found or expired.');
+  if (Date.now() > new Date(item.expires_at).getTime()) { await pool.query('DELETE FROM otp_codes WHERE otp_key=$1', [item.otp_key]); throw new Error('OTP expired.'); }
+  if (item.attempts >= OTP_MAX_ATTEMPTS) { await pool.query('DELETE FROM otp_codes WHERE otp_key=$1', [item.otp_key]); throw new Error('Too many incorrect attempts.'); }
+  const submitted = normalizeOtp(value);
+  if (!/^\d{6}$/.test(submitted) || hash(submitted) !== item.code_hash) {
+    await pool.query('UPDATE otp_codes SET attempts=attempts+1 WHERE otp_key=$1', [item.otp_key]);
+    throw new Error('Invalid OTP.');
+  }
+  await pool.query('DELETE FROM otp_codes WHERE otp_key=$1', [item.otp_key]);
+  return item;
 }
 
 async function main(req, res) {
@@ -144,42 +172,52 @@ async function main(req, res) {
   if (req.method === 'OPTIONS') return sendJson(res, 204, {});
   const u = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   try {
-    if (u.pathname === '/health' && req.method === 'GET') return sendJson(res, 200, { ok: true, service: 'IndoVerification', role: 'OTP service only', emailProvider: 'Zoho Mail API', time: new Date().toISOString() });
+    if (u.pathname === '/health' && req.method === 'GET') {
+      return sendJson(res, 200, { ok: true, service: 'IndoVerification', role: 'OTP service only', emailProvider: 'Zoho Mail API', time: new Date().toISOString() });
+    }
     const body = await readBody(req);
 
     if (u.pathname === '/api/auth/signup/request-otp' && req.method === 'POST') {
       const e = email(body.email), name = String(body.name || '').trim();
       if (!name || !/^\S+@\S+\.\S+$/.test(e)) return sendJson(res, 400, { error: 'Name and a valid email are required.' });
-      await issueOtp(`signup:${e}`, e, 'signup', appName(req));
-      return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.' });
+      const challenge = await issueOtp(e, 'signup', appName(req));
+      return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.', challengeId: challenge });
     }
 
     if (u.pathname === '/api/auth/signup/verify-otp' && req.method === 'POST') {
-      const e = email(body.email), verification = await verifyOtp(`signup:${e}`, body.otp);
-      if (verification.email !== e) return sendJson(res, 400, { error: 'OTP request mismatch.' });
+      const e = email(body.email);
+      const verification = await verifyOtp(body.challengeId, e, body.otp);
+      if (verification.email !== e || verification.purpose !== 'signup') return sendJson(res, 400, { error: 'OTP request mismatch.' });
       return sendJson(res, 200, { ok: true, verified: true, email: e, name: String(body.name || '').trim() });
     }
 
     if (u.pathname === '/api/auth/login/request-otp' && req.method === 'POST') {
       const e = email(body.email);
       if (!/^\S+@\S+\.\S+$/.test(e)) return sendJson(res, 400, { error: 'Enter a valid email.' });
-      await issueOtp(`login:${e}`, e, 'login', appName(req));
-      return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.' });
+      const challenge = await issueOtp(e, 'login', appName(req));
+      return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.', challengeId: challenge });
     }
 
     if (u.pathname === '/api/auth/login/verify-otp' && req.method === 'POST') {
-      const e = email(body.email), verification = await verifyOtp(`login:${e}`, body.otp);
-      if (verification.email !== e) return sendJson(res, 400, { error: 'OTP request mismatch.' });
+      const e = email(body.email);
+      const verification = await verifyOtp(body.challengeId, e, body.otp);
+      if (verification.email !== e || verification.purpose !== 'login') return sendJson(res, 400, { error: 'OTP request mismatch.' });
       const name = String(body.name || '').trim();
-      void mailWelcome(e, name, appName(req)).catch((error) => console.error('Welcome email failed:', error));
-      return sendJson(res, 200, { ok: true, verified: true, email: e });
+      let welcomeSent = true;
+      try {
+        await mailWelcome(e, name, appName(req));
+      } catch (welcomeError) {
+        welcomeSent = false;
+        console.error('Welcome email failed:', welcomeError);
+      }
+      return sendJson(res, 200, { ok: true, verified: true, email: e, welcomeSent });
     }
 
     if (u.pathname === '/api/auth/resend-otp' && req.method === 'POST') {
       const e = email(body.email), purpose = String(body.purpose || 'signup');
       if (!['signup', 'login'].includes(purpose)) return sendJson(res, 400, { error: 'Invalid OTP purpose.' });
-      await issueOtp(`${purpose}:${e}`, e, purpose, appName(req));
-      return sendJson(res, 200, { ok: true, message: 'OTP resent.' });
+      const challenge = await issueOtp(e, purpose, appName(req));
+      return sendJson(res, 200, { ok: true, message: 'OTP resent.', challengeId: challenge });
     }
 
     return sendJson(res, 404, { error: 'Not found' });
