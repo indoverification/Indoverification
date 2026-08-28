@@ -181,6 +181,14 @@ async function zohoOAuthHandler(req, res) {
 http.createServer = function patchedCreateServer(listener, ...args) {
   return originalCreateServer(async (req, res) => {
     const appName = safeAppName(req.headers['x-indo-app-name']);
+    const originalSetHeader = res.setHeader.bind(res);
+    res.setHeader = (name, value) => {
+      if (String(name).toLowerCase() === 'access-control-allow-headers') {
+        const current = String(value || '');
+        if (!/\bx-indo-app-name\b/i.test(current)) value = `${current}, X-Indo-App-Name`;
+      }
+      return originalSetHeader(name, value);
+    };
     return appContext.run({ appName }, async () => {
       try {
         const handled = await zohoOAuthHandler(req, res);
