@@ -2,6 +2,11 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import 'dotenv/config';
 
+// Accept a dedicated Railway variable so stale ZOHO_REFRESH_TOKEN references can be bypassed.
+if (!String(process.env.ZOHO_REFRESH_TOKEN || '').trim() && String(process.env.ZOHO_OAUTH_REFRESH_TOKEN || '').trim()) {
+  process.env.ZOHO_REFRESH_TOKEN = String(process.env.ZOHO_OAUTH_REFRESH_TOKEN).trim();
+}
+
 const originalCreateServer = http.createServer.bind(http);
 const stateStore = new Map();
 const ACCOUNTS_URL = String(process.env.ZOHO_ACCOUNTS_URL || 'https://accounts.zoho.in').replace(/\/$/, '');
