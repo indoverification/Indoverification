@@ -9,7 +9,6 @@ const HOST = '0.0.0.0';
 const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
 const APP_NAME = 'Indomark';
 const APP_TAGLINE = 'Learn. Analyse. Practice. Trade.';
-const APP_URL = 'https://indomark.github.io/Indomark/';
 const OTP_TTL_MS = Math.max(60, Number(process.env.OTP_TTL_SECONDS || 600)) * 1000;
 const OTP_RESEND_MS = Math.max(15, Number(process.env.OTP_RESEND_SECONDS || 60)) * 1000;
 const OTP_MAX_ATTEMPTS = Math.max(1, Number(process.env.OTP_MAX_ATTEMPTS || 5));
@@ -80,11 +79,11 @@ function logoHtml() {
 }
 
 function emailShell({ eyebrow = APP_TAGLINE, body }) {
-  return `<!doctype html><html><body style="margin:0;padding:0;background:#050914;color:#f7fbff;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#050914"><tr><td align="center" style="padding:24px 12px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:620px;background:#0a1322;border:1px solid #263756;border-radius:16px;overflow:hidden"><tr><td align="center" style="padding:28px 20px 22px;background:#050914;border-bottom:1px solid #1b2a41">${logoHtml()}<div style="margin-top:10px;color:#99a8bb;font-size:12px;letter-spacing:.7px">${escapeHtml(eyebrow)}</div></td></tr><tr><td style="padding:30px 26px">${body}</td></tr><tr><td align="center" style="padding:18px 20px;background:#07101d;border-top:1px solid #1b2a41;color:#7f8da1;font-size:12px;line-height:1.7">Automated email from <strong style="color:#cbd5e1">${APP_NAME}</strong>.<br><span style="color:#58e7a5">${APP_URL.replace('https://','')}</span></td></tr></table></td></tr></table></body></html>`;
+  return `<!doctype html><html><body style="margin:0;padding:0;background:#050914;color:#f7fbff;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#050914"><tr><td align="center" style="padding:24px 12px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:620px;background:#0a1322;border:1px solid #263756;border-radius:16px;overflow:hidden"><tr><td align="center" style="padding:28px 20px 22px;background:#050914;border-bottom:1px solid #1b2a41">${logoHtml()}<div style="margin-top:10px;color:#99a8bb;font-size:12px;letter-spacing:.7px">${escapeHtml(eyebrow)}</div></td></tr><tr><td style="padding:30px 26px">${body}</td></tr><tr><td align="center" style="padding:18px 20px;background:#07101d;border-top:1px solid #1b2a41;color:#7f8da1;font-size:12px;line-height:1.7">Automated email from <strong style="color:#cbd5e1">${APP_NAME}</strong>.<br><span style="color:#6f7f92">This message was sent by the Indomark security system.</span></td></tr></table></td></tr></table></body></html>`;
 }
 
-function cta(label, href = APP_URL) {
-  return `<table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center"><tr><td align="center" style="border-radius:10px;background:#58e7a5"><a href="${escapeHtml(href)}" style="display:inline-block;padding:13px 24px;color:#06100b;text-decoration:none;font-weight:800;font-size:14px">${escapeHtml(label)}</a></td></tr></table>`;
+function actionBadge(label) {
+  return `<div style="margin:22px auto 0;max-width:320px;padding:12px 18px;border:1px solid #2c7958;border-radius:10px;background:#10251d;color:#58e7a5;text-align:center;font-size:13px;font-weight:800">${escapeHtml(label)}</div>`;
 }
 
 function otpBox(code) {
@@ -128,10 +127,9 @@ async function mailOtp(to, code, kind) {
   const intro = isSignup
     ? 'Use the one-time code below to verify your email and create your Indomark account.'
     : 'Use the one-time code below to securely complete your Indomark login.';
-  const buttonLabel = isSignup ? 'Verify Email' : 'Verify Login';
   const content = emailShell({
     eyebrow: isSignup ? 'Secure account registration' : 'Secure login verification',
-    body: `<h1 style="margin:0 0 10px;color:#f7fbff;font-size:26px;line-height:1.25">${title}</h1><p style="margin:0;color:#c2ccda;font-size:15px;line-height:1.7">${intro}</p>${otpBox(code)}<p style="margin:0 0 18px;text-align:center;color:#99a8bb;font-size:13px;line-height:1.7">This OTP is valid for <strong style="color:#58e7a5">${Math.round(OTP_TTL_MS / 60000)} minutes</strong>.<br>Never share this code with anyone.</p>${cta(buttonLabel)}<p style="margin:20px 0 0;text-align:center;color:#7f8da1;font-size:12px;line-height:1.6">Didn't request this code? You can safely ignore this email.</p>`,
+    body: `<h1 style="margin:0 0 10px;color:#f7fbff;font-size:26px;line-height:1.25">${title}</h1><p style="margin:0;color:#c2ccda;font-size:15px;line-height:1.7">${intro}</p>${otpBox(code)}<p style="margin:0;text-align:center;color:#99a8bb;font-size:13px;line-height:1.7">This OTP is valid for <strong style="color:#58e7a5">${Math.round(OTP_TTL_MS / 60000)} minutes</strong>.<br>Never share this code with anyone.</p><p style="margin:20px 0 0;text-align:center;color:#7f8da1;font-size:12px;line-height:1.6">Didn't request this code? You can safely ignore this email.</p>`,
   });
   await sendMail({ to, subject: isSignup ? `${APP_NAME} • Verify your email` : `${APP_NAME} • Login verification code`, content });
 }
@@ -140,7 +138,7 @@ async function mailNewAccountWelcome(to, name) {
   const safeName = escapeHtml(name || 'there');
   const content = emailShell({
     eyebrow: APP_TAGLINE,
-    body: `<h1 style="margin:0 0 10px;color:#f7fbff;font-size:27px">Welcome to <span style="color:#58e7a5">Indomark</span>! 🎉</h1><p style="margin:0;color:#d4dbe5;font-size:16px;line-height:1.7">Hi ${safeName},</p><p style="margin:8px 0 20px;color:#aab7c8;font-size:15px;line-height:1.7">Your Indomark account has been created successfully. You’re ready to learn, analyse, practice and trade.</p><div style="padding:18px;background:#0d1829;border:1px solid #263756;border-radius:13px"><p style="margin:0 0 10px;color:#58e7a5;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase">Your account is ready</p><p style="margin:0;color:#d4dbe5;font-size:14px;line-height:1.7">Track markets, explore stocks, practise strategies and build your investing knowledge from one place.</p></div><div style="margin-top:24px">${cta('Open Indomark')}</div>`,
+    body: `<h1 style="margin:0 0 10px;color:#f7fbff;font-size:27px">Welcome to <span style="color:#58e7a5">Indomark</span>! 🎉</h1><p style="margin:0;color:#d4dbe5;font-size:16px;line-height:1.7">Hi ${safeName},</p><p style="margin:8px 0 20px;color:#aab7c8;font-size:15px;line-height:1.7">Your Indomark account has been created successfully. You’re ready to learn, analyse, practice and trade.</p><div style="padding:18px;background:#0d1829;border:1px solid #263756;border-radius:13px"><p style="margin:0 0 10px;color:#58e7a5;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase">Your account is ready</p><p style="margin:0;color:#d4dbe5;font-size:14px;line-height:1.7">Track markets, explore stocks, practise strategies and build your investing knowledge from one place.</p></div>${actionBadge('Your Indomark account is ready to use')}`,
   });
   await sendMail({ to, subject: `${APP_NAME} • Welcome — your account is ready`, content });
 }
@@ -150,7 +148,7 @@ async function mailWelcomeBack(to, name) {
   const loginTime = new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' }).format(new Date());
   const content = emailShell({
     eyebrow: 'Login successful',
-    body: `<h1 style="margin:0 0 10px;color:#f7fbff;font-size:27px">Welcome <span style="color:#58e7a5">back</span>!</h1><p style="margin:0;color:#d4dbe5;font-size:16px;line-height:1.7">Hi ${safeName}, you have successfully logged in to your Indomark account.</p><div style="margin:22px 0;padding:17px 18px;background:#0d1829;border:1px solid #263756;border-radius:13px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr><td style="padding:5px 0;color:#8fa0b5;font-size:12px">Login time</td><td align="right" style="padding:5px 0;color:#f7fbff;font-size:12px;font-weight:700">${escapeHtml(loginTime)} IST</td></tr><tr><td style="padding:5px 0;color:#8fa0b5;font-size:12px">Account</td><td align="right" style="padding:5px 0;color:#58e7a5;font-size:12px;font-weight:700">${escapeHtml(to)}</td></tr></table></div><p style="margin:0 0 22px;text-align:center;color:#99a8bb;font-size:12px;line-height:1.6">If this login wasn't you, secure your account immediately.</p>${cta('Go to Indomark')}`,
+    body: `<h1 style="margin:0 0 10px;color:#f7fbff;font-size:27px">Welcome <span style="color:#58e7a5">back</span>!</h1><p style="margin:0;color:#d4dbe5;font-size:16px;line-height:1.7">Hi ${safeName}, you have successfully logged in to your Indomark account.</p><div style="margin:22px 0;padding:17px 18px;background:#0d1829;border:1px solid #263756;border-radius:13px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr><td style="padding:5px 0;color:#8fa0b5;font-size:12px">Login time</td><td align="right" style="padding:5px 0;color:#f7fbff;font-size:12px;font-weight:700">${escapeHtml(loginTime)} IST</td></tr><tr><td style="padding:5px 0;color:#8fa0b5;font-size:12px">Account</td><td align="right" style="padding:5px 0;color:#58e7a5;font-size:12px;font-weight:700">${escapeHtml(to)}</td></tr></table></div><p style="margin:0;text-align:center;color:#99a8bb;font-size:12px;line-height:1.6">If this login wasn't you, secure your account through your usual Indomark login flow.</p>${actionBadge('Login verified successfully')}`,
   });
   await sendMail({ to, subject: `${APP_NAME} • Welcome back — login successful`, content });
 }
