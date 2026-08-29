@@ -60,8 +60,14 @@ async function readBody(req) {
   try { return JSON.parse(raw); } catch { throw new Error('Invalid JSON'); }
 }
 
-function email(value) { return String(value || '').trim().toLowerCase(); }
-function validEmail(value) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email(value)); }
+function email(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/[\u0000-\u001F\u007F\u00A0\u200B-\u200D\u2060\uFEFF]/g, '')
+    .trim()
+    .toLowerCase();
+}
+function validEmail(value) { return /^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$/i.test(email(value)); }
 function normalizeOtp(value) { return String(value || '').normalize('NFKC').replace(/[^0-9]/g, '').slice(0, 6); }
 function generateOtp() { return String(crypto.randomInt(100000, 1000000)); }
 function generateToken(bytes = 24) { return crypto.randomBytes(bytes).toString('hex'); }
@@ -90,10 +96,6 @@ function cta(label, href = APP_URL) {
   return `<table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center"><tr><td align="center" style="border-radius:10px;background:#F97316"><a href="${escapeHtml(href)}" style="display:inline-block;padding:13px 24px;color:#06100b;text-decoration:none;font-weight:800;font-size:14px">${escapeHtml(label)}</a></td></tr></table>`;
 }
 
-function actionBadge(label) {
-  return `<div style="margin:22px auto 0;max-width:320px;padding:12px 18px;border:1px solid #c2410c;border-radius:10px;background:#2a160c;color:#F97316;text-align:center;font-size:13px;font-weight:800">${escapeHtml(label)}</div>`;
-}
-
 function otpBox(code) {
   return `<div style="margin:22px 0;padding:20px 16px;background:#0d1829;border:1px solid #263756;border-radius:13px;text-align:center"><div style="font-size:11px;color:#99a8bb;letter-spacing:1.5px;text-transform:uppercase;font-weight:800">Your OTP code</div><div style="margin-top:10px;font-size:34px;line-height:1.2;letter-spacing:9px;font-weight:900;color:#F97316">${escapeHtml(code)}</div></div>`;
 }
@@ -115,17 +117,26 @@ async function getZohoAccessToken() {
 }
 
 async function sendMail({ to, subject, content }) {
+  const recipient = email(to);
+  const sender = email(ZOHO_FROM);
+  if (!validEmail(recipient)) throw new Error('The recipient email address is invalid after normalization.');
+  if (!validEmail(sender)) throw new Error('The configured Zoho sender address is invalid.');
+
   const token = await getZohoAccessToken();
   const response = await fetch(`${ZOHO_MAIL_API_URL}/api/accounts/${encodeURIComponent(ZOHO_ACCOUNT_ID)}/messages`, {
     method: 'POST',
     headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ fromAddress: ZOHO_FROM, toAddress: to, subject, content, mailFormat: 'html' }),
+    body: JSON.stringify({ fromAddress: sender, toAddress: recipient, subject: String(subject || '').trim(), content, mailFormat: 'html' }),
   });
   const body = await response.json().catch(() => ({}));
   const apiCode = body?.status?.code;
   if (!response.ok || (apiCode !== undefined && Number(apiCode) !== 200)) {
-    throw new Error(body?.status?.description || body?.message || `Zoho Mail send failed (${response.status})`);
+    const description = body?.status?.description || body?.message || `Zoho Mail send failed (${response.status})`;
+    const recipientDomain = recipient.split('@')[1] || 'unknown-domain';
+    console.error(`MAIL SEND FAILED provider=zoho recipientDomain=${recipientDomain}: ${description}`);
+    throw new Error(description);
   }
+  console.log(`MAIL SEND ACCEPTED provider=zoho recipientDomain=${recipient.split('@')[1] || 'unknown-domain'}`);
   return body;
 }
 
@@ -193,23 +204,24 @@ async function initDb() {
 }
 
 async function issueOtp(emailAddress, purpose) {
-  const latest = await pool.query('SELECT sent_at FROM otp_codes WHERE email=$1 AND purpose=$2 ORDER BY sent_at DESC LIMIT 1', [emailAddress, purpose]);
+  const recipient = email(emailAddress);
+  const latest = await pool.query('SELECT sent_at FROM otp_codes WHERE email=$1 AND purpose=$2 ORDER BY sent_at DESC LIMIT 1', [recipient, purpose]);
   const now = new Date();
   if (latest.rows[0] && now.getTime() - new Date(latest.rows[0].sent_at).getTime() < OTP_RESEND_MS) {
     throw new Error('Please wait before requesting another OTP.');
   }
 
-  await pool.query('DELETE FROM otp_codes WHERE email=$1 AND purpose=$2', [emailAddress, purpose]);
+  await pool.query('DELETE FROM otp_codes WHERE email=$1 AND purpose=$2', [recipient, purpose]);
 
   const code = generateOtp();
   const challenge = generateToken();
   await pool.query(
     'INSERT INTO otp_codes (otp_key,email,purpose,code_hash,sent_at,expires_at,attempts,challenge_id) VALUES ($1,$2,$3,$4,$5,$6,0,$7)',
-    [challenge, emailAddress, purpose, hash(code), now, new Date(now.getTime() + OTP_TTL_MS), challenge],
+    [challenge, recipient, purpose, hash(code), now, new Date(now.getTime() + OTP_TTL_MS), 0, challenge],
   );
 
   try {
-    await mailOtp(emailAddress, code, purpose);
+    await mailOtp(recipient, code, purpose);
   } catch (error) {
     await pool.query('DELETE FROM otp_codes WHERE otp_key=$1', [challenge]).catch(() => {});
     throw error;
@@ -219,7 +231,8 @@ async function issueOtp(emailAddress, purpose) {
 
 async function verifyOtp(challengeId, emailAddress, submittedOtp) {
   const key = String(challengeId || '').trim();
-  const result = await pool.query('SELECT * FROM otp_codes WHERE challenge_id=$1 AND email=$2 LIMIT 1', [key, emailAddress]);
+  const recipient = email(emailAddress);
+  const result = await pool.query('SELECT * FROM otp_codes WHERE challenge_id=$1 AND email=$2 LIMIT 1', [key, recipient]);
   const item = result.rows[0];
   if (!item) throw new Error('OTP not found or expired.');
   if (Date.now() > new Date(item.expires_at).getTime()) {
@@ -243,17 +256,19 @@ async function verifyOtp(challengeId, emailAddress, submittedOtp) {
 }
 
 async function createSignupWelcomeToken(emailAddress, name) {
+  const recipient = email(emailAddress);
   const token = generateToken();
-  await pool.query('DELETE FROM signup_welcome_tokens WHERE email=$1 AND used_at IS NULL', [emailAddress]);
+  await pool.query('DELETE FROM signup_welcome_tokens WHERE email=$1 AND used_at IS NULL', [recipient]);
   await pool.query(
     'INSERT INTO signup_welcome_tokens (token_hash,email,name,created_at,expires_at) VALUES ($1,$2,$3,NOW(),$4)',
-    [hash(token), emailAddress, String(name || '').trim(), new Date(Date.now() + WELCOME_TOKEN_TTL_MS)],
+    [hash(token), recipient, String(name || '').trim(), new Date(Date.now() + WELCOME_TOKEN_TTL_MS)],
   );
   return token;
 }
 
 async function consumeSignupWelcomeToken(token, emailAddress, name) {
-  const result = await pool.query('SELECT * FROM signup_welcome_tokens WHERE token_hash=$1 AND email=$2 LIMIT 1', [hash(token), emailAddress]);
+  const recipient = email(emailAddress);
+  const result = await pool.query('SELECT * FROM signup_welcome_tokens WHERE token_hash=$1 AND email=$2 LIMIT 1', [hash(token), recipient]);
   const item = result.rows[0];
   if (!item) throw new Error('Welcome email authorization expired.');
   if (item.used_at) throw new Error('Welcome email has already been sent.');
@@ -263,7 +278,7 @@ async function consumeSignupWelcomeToken(token, emailAddress, name) {
   }
 
   const resolvedName = String(name || item.name || 'there').trim();
-  await mailNewAccountWelcome(emailAddress, resolvedName);
+  await mailNewAccountWelcome(recipient, resolvedName);
   await pool.query('UPDATE signup_welcome_tokens SET used_at=NOW() WHERE token_hash=$1 AND used_at IS NULL', [hash(token)]);
   return true;
 }
@@ -348,7 +363,7 @@ async function main(req, res) {
   } catch (error) {
     console.error('REQUEST ERROR:', error);
     const message = error instanceof Error ? error.message : 'Server error';
-    const isEmailFailure = /Zoho Mail API|Zoho token|Zoho Mail send|email is not configured/i.test(message);
+    const isEmailFailure = /Zoho Mail API|Zoho token|Zoho Mail send|email is not configured|configured Zoho sender|recipient email address/i.test(message);
     const status = isEmailFailure ? 503 : 400;
     return sendJson(res, status, { ok: false, error: message });
   }
