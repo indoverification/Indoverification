@@ -217,7 +217,7 @@ async function issueOtp(emailAddress, purpose) {
   const challenge = generateToken();
   await pool.query(
     'INSERT INTO otp_codes (otp_key,email,purpose,code_hash,sent_at,expires_at,attempts,challenge_id) VALUES ($1,$2,$3,$4,$5,$6,0,$7)',
-    [challenge, recipient, purpose, hash(code), now, new Date(now.getTime() + OTP_TTL_MS), 0, challenge],
+    [challenge, recipient, purpose, hash(code), now, new Date(now.getTime() + OTP_TTL_MS), challenge],
   );
 
   try {
