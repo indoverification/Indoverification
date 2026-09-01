@@ -1,4 +1,6 @@
 // Railway runtime entrypoint for the shared multi-app backend.
-// Every app uses the same mail transport and sender identity. App-specific
-// branding/templates remain inside server-multi-app.js.
+// Every app uses one shared Zoho SMTP mail service and one global sender.
+import { installSharedMailTransport } from './mail-service.js';
+
+installSharedMailTransport();
 await import('./server.js');
