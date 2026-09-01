@@ -1,5 +1,10 @@
 // Railway runtime entrypoint.
-// Keep the shared Zoho Mail API transport stable and independent from app templates.
-// The legacy SMTP bridge is not used in production because outbound SMTP can
-// time out on hosted Railway workers. The active server uses the Zoho Mail API.
+// The shared mail transport stays app-independent: every app gets its own
+// template/branding, while the sender identity remains IndoVerification.
+import { installZohoDisplayNameMailBridge } from './smtp-display-name-fallback.js';
+
+installZohoDisplayNameMailBridge();
+
+// The active multi-app server keeps appId/template isolation and uses the
+// Zoho Mail API whenever SMTP is unavailable.
 await import('./server.js');
