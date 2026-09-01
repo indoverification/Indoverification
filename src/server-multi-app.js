@@ -5,6 +5,7 @@ import pg from 'pg';
 import 'dotenv/config';
 import { getAppConfig, listApps, DEFAULT_APP_ID, appRoot } from './app-registry.js';
 import { resolveAppContext, appIdForOrigin, APP_ID_HEADER, LEGACY_APP_HEADER } from './app-request.js';
+import { sendMail } from './mail-service.js';
 
 const { Pool } = pg;
 const PORT = Number(process.env.PORT || 10000);
@@ -14,14 +15,6 @@ const OTP_TTL_MS = Math.max(60, Number(process.env.OTP_TTL_SECONDS || 600)) * 10
 const OTP_RESEND_MS = Math.max(15, Number(process.env.OTP_RESEND_SECONDS || 60)) * 1000;
 const OTP_MAX_ATTEMPTS = Math.max(1, Number(process.env.OTP_MAX_ATTEMPTS || 5));
 const WELCOME_TOKEN_TTL_MS = 15 * 60 * 1000;
-
-const ZOHO_ACCOUNTS_URL = String(process.env.ZOHO_ACCOUNTS_URL || 'https://accounts.zoho.in').replace(/\/$/, '');
-const ZOHO_MAIL_API_URL = String(process.env.ZOHO_MAIL_API_URL || 'https://mail.zoho.in').replace(/\/$/, '');
-const ZOHO_CLIENT_ID = String(process.env.ZOHO_CLIENT_ID || '').trim();
-const ZOHO_CLIENT_SECRET = String(process.env.ZOHO_CLIENT_SECRET || '').trim();
-const ZOHO_REFRESH_TOKEN = String(process.env.ZOHO_REFRESH_TOKEN || process.env.ZOHO_OAUTH_REFRESH_TOKEN || '').trim();
-const ZOHO_ACCOUNT_ID = String(process.env.ZOHO_ACCOUNT_ID || '').trim();
-const ZOHO_FROM = String(process.env.ZOHO_FROM || '').trim();
 
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required.');
 const pool = new Pool({
@@ -116,37 +109,6 @@ function otpBox(code, color) {
   return `<div style="margin:22px 0;padding:20px;background:#f7f9fc;border:1px solid #dce5f0;border-radius:13px;text-align:center"><div style="font-size:11px;color:#7b8799;letter-spacing:1.5px;text-transform:uppercase;font-weight:800">Your OTP code</div><div style="margin-top:10px;font-size:34px;letter-spacing:9px;font-weight:900;color:${escapeHtml(color)}">${escapeHtml(code)}</div></div>`;
 }
 
-let zohoToken = null;
-let zohoTokenExpiresAt = 0;
-async function getZohoAccessToken() {
-  if (!ZOHO_CLIENT_ID || !ZOHO_CLIENT_SECRET || !ZOHO_REFRESH_TOKEN || !ZOHO_ACCOUNT_ID || !ZOHO_FROM) throw new Error('Zoho Mail API is not configured.');
-  if (zohoToken && Date.now() < zohoTokenExpiresAt - 60_000) return zohoToken;
-  const params = new URLSearchParams({ refresh_token: ZOHO_REFRESH_TOKEN, client_id: ZOHO_CLIENT_ID, client_secret: ZOHO_CLIENT_SECRET, grant_type: 'refresh_token' });
-  const response = await fetch(`${ZOHO_ACCOUNTS_URL}/oauth/v2/token?${params.toString()}`, { method: 'POST' });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok || !body.access_token) throw new Error(body.error || `Zoho token request failed (${response.status})`);
-  zohoToken = body.access_token;
-  zohoTokenExpiresAt = Date.now() + Number(body.expires_in || 3600) * 1000;
-  return zohoToken;
-}
-
-async function sendMail({ to, subject, content }) {
-  const recipient = email(to);
-  const sender = email(ZOHO_FROM);
-  if (!validEmail(recipient)) throw new Error('The recipient email address is invalid after normalization.');
-  if (!validEmail(sender)) throw new Error('The configured Zoho sender address is invalid.');
-  const token = await getZohoAccessToken();
-  const response = await fetch(`${ZOHO_MAIL_API_URL}/api/accounts/${encodeURIComponent(ZOHO_ACCOUNT_ID)}/messages`, {
-    method: 'POST',
-    headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ fromAddress: sender, toAddress: recipient, subject: String(subject || '').trim(), content, mailFormat: 'html' }),
-  });
-  const body = await response.json().catch(() => ({}));
-  const apiCode = body?.status?.code;
-  if (!response.ok || (apiCode !== undefined && Number(apiCode) !== 200)) throw new Error(body?.status?.description || body?.message || `Zoho Mail send failed (${response.status})`);
-  return body;
-}
-
 async function mailOtp(appId, to, code, kind) {
   const brand = loadBrand(appId);
   const name = brand.branding.name || getAppConfig(appId).name;
@@ -154,7 +116,7 @@ async function mailOtp(appId, to, code, kind) {
   const isSignup = kind === 'signup';
   const body = `<h1 style="margin:0 0 10px;font-size:26px">${isSignup ? 'Verify your email' : 'Login verification'}</h1><p style="margin:0;color:#526177;font-size:15px;line-height:1.7">${isSignup ? `Use this code to verify your email and create your ${escapeHtml(name)} account.` : `Use this code to securely complete your ${escapeHtml(name)} login.`}</p>${otpBox(code, color)}<p style="margin:0;text-align:center;color:#7b8799;font-size:13px;line-height:1.7">This OTP is valid for <strong style="color:${escapeHtml(color)}">${Math.round(OTP_TTL_MS / 60000)} minutes</strong>.</p>`;
   const content = emailShell(appId, { eyebrow: isSignup ? 'Secure account registration' : 'Secure login verification', body });
-  await sendMail({ to, subject: `${name} • ${isSignup ? 'Verify your email' : 'Login verification code'}`, content });
+  await sendMail({ to, subject: `${name} • ${isSignup ? 'Verify your email' : 'Login verification code'}`, html: content });
 }
 
 async function mailNewAccountWelcome(appId, to, nameValue) {
@@ -164,7 +126,7 @@ async function mailNewAccountWelcome(appId, to, nameValue) {
   const safeName = escapeHtml(nameValue || 'there');
   const body = `<h1 style="margin:0 0 10px;font-size:27px">Welcome to <span style="color:${escapeHtml(color)}">${escapeHtml(name)}</span>!</h1><p style="margin:0;color:#526177;font-size:16px;line-height:1.7">Hi ${safeName},</p><p style="margin:8px 0 20px;color:#65738a;font-size:15px;line-height:1.7">Your account has been created successfully.</p>`;
   const content = emailShell(appId, { eyebrow: 'Account created successfully', body, welcome: true });
-  await sendMail({ to, subject: `${name} • Welcome — your account is ready`, content });
+  await sendMail({ to, subject: `${name} • Welcome — your account is ready`, html: content });
 }
 
 async function mailWelcomeBack(appId, to, nameValue) {
@@ -174,7 +136,7 @@ async function mailWelcomeBack(appId, to, nameValue) {
   const safeName = escapeHtml(nameValue || 'there');
   const body = `<h1 style="margin:0 0 10px;font-size:27px">Welcome <span style="color:${escapeHtml(color)}">back</span>!</h1><p style="margin:0;color:#526177;font-size:16px;line-height:1.7">Hi ${safeName}, you have successfully logged in to your ${escapeHtml(name)} account.</p>`;
   const content = emailShell(appId, { eyebrow: 'Login successful', body, welcome: true });
-  await sendMail({ to, subject: `${name} • Welcome back — login successful`, content });
+  await sendMail({ to, subject: `${name} • Welcome back — login successful`, html: content });
 }
 
 async function initDb() {
@@ -271,7 +233,7 @@ async function main(req, res) {
   if (req.method === 'OPTIONS') return sendJson(res, 204, {});
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   try {
-    if (url.pathname === '/health' && req.method === 'GET') return sendJson(res, 200, { ok: true, service: 'IndoVerification', role: 'multi-app OTP service', apps: listApps().map(({ id, name }) => ({ id, name })), emailConfigured: Boolean(ZOHO_CLIENT_ID && ZOHO_CLIENT_SECRET && ZOHO_REFRESH_TOKEN && ZOHO_ACCOUNT_ID && ZOHO_FROM), time: new Date().toISOString() });
+    if (url.pathname === '/health' && req.method === 'GET') return sendJson(res, 200, { ok: true, service: 'IndoVerification', role: 'multi-app OTP service', apps: listApps().map(({ id, name }) => ({ id, name })), emailConfigured: Boolean(process.env.SMTP_USER && (process.env.SMTP_PASS || process.env.SMTP_PASSWORD) && process.env.SMTP_HOST && process.env.SMTP_PORT), time: new Date().toISOString() });
 
     const body = await readBody(req);
     const context = appFromRequest(req, body);
@@ -325,7 +287,7 @@ async function main(req, res) {
   } catch (error) {
     console.error('REQUEST ERROR:', error);
     const message = error instanceof Error ? error.message : 'Server error';
-    const status = /Zoho Mail API|Zoho token|Zoho Mail send|configured Zoho sender|recipient email address/i.test(message) ? 503 : 400;
+    const status = /Zoho Mail API|Zoho token|Zoho Mail send|configured Zoho sender|recipient email address|SMTP/i.test(message) ? 503 : 400;
     return sendJson(res, status, { ok: false, error: message });
   }
 }
