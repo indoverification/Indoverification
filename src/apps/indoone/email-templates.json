@@ -1,0 +1,13 @@
+{
+  "appId": "indoone",
+  "templates": {
+    "signupOtp": "signup-otp",
+    "loginOtp": "login-otp",
+    "welcome": "welcome"
+  },
+  "branding": {
+    "name": "Indoone",
+    "logoAsset": "logo.svg",
+    "primaryColor": "#6A35D9"
+  }
+}
