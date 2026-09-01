@@ -6,4 +6,10 @@ const plainMatch = rawZohoFrom.match(/^["']?\s*([^<>\s]+@[^<>\s]+)\s*["']?$/i);
 if (angleMatch?.[1]) process.env.ZOHO_FROM = angleMatch[1].trim().toLowerCase();
 else if (plainMatch?.[1]) process.env.ZOHO_FROM = plainMatch[1].trim().toLowerCase();
 
+// The shared OTP API is called directly by browser apps. The production
+// server already handles OPTIONS requests; using '*' here keeps the shared
+// service usable by both Indoone and Indomark web clients without requiring
+// an app-specific Origin setting in Railway.
+if (!process.env.CORS_ORIGIN) process.env.CORS_ORIGIN = '*';
+
 await import('./server-v2.js');
