@@ -102,7 +102,7 @@ function emailShell(appId, { eyebrow, body, welcome = false }) {
   const brand = loadBrand(appId);
   const name = escapeHtml(brand.branding.name);
   const color = escapeHtml(brand.branding.primaryColor || '#2563EB');
-  return `<!doctype html><html><body style="margin:0;padding:24px 12px;background:#f5f8fc;color:#152033;font-family:Arial,Helvetica,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr><td align="center"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:620px;background:#fff;border:1px solid #dce5f0;border-radius:16px;overflow:hidden"><tr><td align="center" style="padding:28px 20px 22px;border-bottom:1px solid #e7edf5">${logoHtml(brand)}<div style="margin-top:8px;color:#6b778c;font-size:12px">${escapeHtml(eyebrow)}</div></td></tr><tr><td style="padding:30px 26px">${body}</td></tr><tr><td align="center" style="padding:18px 20px;background:#f8fafc;border-top:1px solid #e7edf5;color:#7b8799;font-size:12px;line-height:1.7">Automated email from <strong style="color:${color}">${name}</strong>${welcome ? '' : '. Please do not share your OTP.'}</td></tr></table></td></tr></table></body></html>`;
+  return `<!doctype html><html><body style="margin:0;padding:24px 12px;background:#f5f8fc;color:#152033;font-family:Arial,Helvetica,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr><td align="center"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:620px;background:#fff;border:1px solid #dce5f0;border-radius:16px;overflow:hidden"><tr><td align="center" style="padding:28px 20px 22px;border-bottom:1px solid #e7edf5">${logoHtml(brand)}<div style="margin-top:8px;color:#6b778c;font-size:12px">${escapeHtml(eyebrow)}</div></td></tr><tr><td style="padding:30px 26px">${body}</td></tr><tr><td align="center" style="padding:18px 20px;background:#f8fafc;border-top:1px solid #e7edf5;color:#7b8799;font-size:12px;line-height:1.7">Automated email from <strong style="color:${color}">${name}</strong>. Your email is verified by <strong style="color:#152033">Indoverification</strong>${welcome ? '.' : '. Please do not share your OTP.'}</td></tr></table></td></tr></table></body></html>`;
 }
 
 function otpBox(code, color) {
@@ -219,77 +219,13 @@ async function createSignupWelcomeToken(appId, emailAddress, name) {
 
 async function consumeSignupWelcomeToken(appId, token, emailAddress, name) {
   const recipient = email(emailAddress);
-  const tokenHash = hash(token);
-  const result = await pool.query('SELECT * FROM signup_welcome_tokens WHERE token_hash=$1 AND app_id=$2 AND email=$3 LIMIT 1', [tokenHash, appId, recipient]);
+  const result = await pool.query('SELECT * FROM signup_welcome_tokens WHERE token_hash=$1 AND app_id=$2 AND email=$3 AND used_at IS NULL LIMIT 1', [hash(token), appId, recipient]);
   const item = result.rows[0];
-  if (!item || item.used_at) throw new Error('Welcome email authorization expired.');
-  if (Date.now() > new Date(item.expires_at).getTime()) { await pool.query('DELETE FROM signup_welcome_tokens WHERE token_hash=$1', [tokenHash]); throw new Error('Welcome email authorization expired.'); }
-  await mailNewAccountWelcome(appId, recipient, String(name || item.name || 'there').trim());
-  await pool.query('UPDATE signup_welcome_tokens SET used_at=NOW() WHERE token_hash=$1 AND used_at IS NULL', [tokenHash]);
-}
-
-async function main(req, res) {
-  setCors(res, req);
-  if (req.method === 'OPTIONS') return sendJson(res, 204, {});
-  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-  try {
-    if (url.pathname === '/health' && req.method === 'GET') return sendJson(res, 200, { ok: true, service: 'IndoVerification', role: 'multi-app OTP service', apps: listApps().map(({ id, name }) => ({ id, name })), emailConfigured: Boolean(process.env.SMTP_USER && (process.env.SMTP_PASS || process.env.SMTP_PASSWORD) && process.env.SMTP_HOST && process.env.SMTP_PORT), time: new Date().toISOString() });
-
-    const body = await readBody(req);
-    const context = appFromRequest(req, body);
-    const appId = context.appId;
-
-    if (url.pathname === '/api/auth/signup/request-otp' && req.method === 'POST') {
-      const e = email(body.email); const name = String(body.name || '').trim();
-      if (!name || !validEmail(e)) return sendJson(res, 400, { ok: false, error: 'Name and a valid email are required.' });
-      const challengeId = await issueOtp(appId, e, 'signup');
-      return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.', challengeId, appId });
-    }
-
-    if (url.pathname === '/api/auth/signup/verify-otp' && req.method === 'POST') {
-      const e = email(body.email); if (!validEmail(e)) return sendJson(res, 400, { ok: false, error: 'Enter a valid email.' });
-      const verification = await verifyOtp(appId, body.challengeId, e, body.otp);
-      if (verification.purpose !== 'signup') return sendJson(res, 400, { ok: false, error: 'OTP request mismatch.' });
-      const name = String(body.name || '').trim(); const welcomeToken = await createSignupWelcomeToken(appId, e, name);
-      return sendJson(res, 200, { ok: true, verified: true, email: e, name, welcomeToken, appId });
-    }
-
-    if (url.pathname === '/api/auth/signup/welcome' && req.method === 'POST') {
-      const e = email(body.email); if (!validEmail(e)) return sendJson(res, 400, { ok: false, error: 'Enter a valid email.' });
-      await consumeSignupWelcomeToken(appId, body.welcomeToken, e, String(body.name || '').trim());
-      return sendJson(res, 200, { ok: true, welcomeSent: true, appId });
-    }
-
-    if (url.pathname === '/api/auth/login/request-otp' && req.method === 'POST') {
-      const e = email(body.email); if (!validEmail(e)) return sendJson(res, 400, { ok: false, error: 'Enter a valid email.' });
-      const challengeId = await issueOtp(appId, e, 'login');
-      return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.', challengeId, appId });
-    }
-
-    if (url.pathname === '/api/auth/login/verify-otp' && req.method === 'POST') {
-      const e = email(body.email); if (!validEmail(e)) return sendJson(res, 400, { ok: false, error: 'Enter a valid email.' });
-      const verification = await verifyOtp(appId, body.challengeId, e, body.otp);
-      if (verification.purpose !== 'login') return sendJson(res, 400, { ok: false, error: 'OTP request mismatch.' });
-      let welcomeSent = true;
-      try { await mailWelcomeBack(appId, e, String(body.name || '').trim()); } catch (error) { welcomeSent = false; console.error('Welcome-back email failed:', error instanceof Error ? error.message : error); }
-      return sendJson(res, 200, { ok: true, verified: true, email: e, welcomeSent, appId });
-    }
-
-    if (url.pathname === '/api/auth/resend-otp' && req.method === 'POST') {
-      const e = email(body.email); const purpose = String(body.purpose || 'signup');
-      if (!validEmail(e)) return sendJson(res, 400, { ok: false, error: 'Enter a valid email.' });
-      if (!['signup', 'login'].includes(purpose)) return sendJson(res, 400, { ok: false, error: 'Invalid OTP purpose.' });
-      const challengeId = await issueOtp(appId, e, purpose);
-      return sendJson(res, 200, { ok: true, message: 'OTP resent.', challengeId, appId });
-    }
-
-    return sendJson(res, 404, { ok: false, error: 'Not found' });
-  } catch (error) {
-    console.error('REQUEST ERROR:', error);
-    const message = error instanceof Error ? error.message : 'Server error';
-    const status = /Zoho Mail API|Zoho token|Zoho Mail send|configured Zoho sender|recipient email address|SMTP/i.test(message) ? 503 : 400;
-    return sendJson(res, status, { ok: false, error: message });
+  if (!item) throw new Error('Invalid signup welcome token.');
+  if (Date.now() > new Date(item.expires_at).getTime()) {
+    await pool.query('DELETE FROM signup_welcome_tokens WHERE token_hash=$1', [hash(token)]);
+    throw new Error('Signup welcome token expired.');
   }
+  await pool.query('UPDATE signup_welcome_tokens SET used_at=NOW() WHERE token_hash=$1', [hash(token)]);
+  return item;
 }
-
-initDb().then(() => http.createServer(main).listen(PORT, HOST, () => console.log(`IndoVerification multi-app service listening on ${HOST}:${PORT}`))).catch((error) => { console.error('Startup failed:', error); process.exit(1); });
