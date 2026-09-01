@@ -1,4 +1,4 @@
-import { DEFAULT_APP_ID, getAppConfig } from './app-registry.js';
+import { DEFAULT_APP_ID, getAppConfig, listApps } from './app-registry.js';
 
 export const APP_ID_HEADER = 'x-indo-app-id';
 export const LEGACY_APP_HEADER = 'x-indo-app-name';
@@ -22,6 +22,13 @@ export function resolveAppId({ body = {}, headers = {} } = {}) {
   const legacy = normalize(headers[LEGACY_APP_HEADER] || headers[LEGACY_APP_HEADER.toLowerCase()]);
   const candidate = explicit || legacy || DEFAULT_APP_ID;
   return getAppConfig(candidate).id;
+}
+
+export function appIdForOrigin(origin) {
+  const normalizedOrigin = normalize(origin);
+  if (!normalizedOrigin) return '';
+  const match = listApps().find((app) => originOf(app.url) === normalizedOrigin);
+  return match?.id || '';
 }
 
 export function resolveAppContext(options = {}) {
