@@ -16,8 +16,8 @@ const APPS = Object.freeze({
 });
 
 export function getAppConfig(appId = 'indomark') {
-  const id = String(appId || '').trim().toLowerCase();
-  const app = APPsafe(id);
+  const id = normalizeAppId(appId);
+  const app = APPS[id];
   if (!app) {
     const error = new Error('Unknown application.');
     error.code = 'UNKNOWN_APP';
@@ -27,18 +27,18 @@ export function getAppConfig(appId = 'indomark') {
 }
 
 export function hasApp(appId) {
-  const id = String(appId || '').trim().toLowerCase();
-  return Boolean(APPs[id]);
+  const id = normalizeAppId(appId);
+  return Object.prototype.hasOwnProperty.call(APPS, id);
 }
 
 export function listApps() {
-  return Object.values(APPs).map(({ id, name, url, supportEmail, templateRoot }) => ({
+  return Object.values(APPS).map(({ id, name, url, supportEmail, templateRoot }) => ({
     id, name, url, supportEmail, templateRoot,
   }));
 }
 
-function APPsafe(id) {
-  return Object.prototype.hasOwnProperty.call(APPs, id) ? APPs[id] : null;
+function normalizeAppId(appId) {
+  return String(appId || '').trim().toLowerCase();
 }
 
 export const DEFAULT_APP_ID = 'indomark';
