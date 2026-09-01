@@ -1,36 +1,36 @@
 import nodemailer from 'nodemailer';
 
-// This transport is intentionally the ONLY delivery path when the bridge is installed.
-// The sender identity is fixed globally and is never derived from an app template.
+// One global sender identity for every app. App-specific branding stays in the
+// template layer and is never allowed to change this From identity.
 const DISPLAY_NAME = String(process.env.ZOHO_FROM_DISPLAY_NAME || 'IndoVerification').trim() || 'IndoVerification';
-const RAW_HOST = String(process.env.SMTP_HOST || 'smtp.zoho.in').trim();
-// Zoho's India accounts use smtp.zoho.in. Normalize the old .com value so a stale
-// Railway variable cannot send this service to the wrong regional SMTP endpoint.
-const SMTP_HOST = /^smtp\.zoho\.com$/i.test(RAW_HOST) ? 'smtp.zoho.in' : RAW_HOST;
-const SMTP_PORT = Number(process.env.SMTP_PORT || 465);
-const SMTP_SECURE = String(process.env.SMTP_SECURE || (SMTP_PORT === 465 ? 'true' : 'false')).trim().toLowerCase() === 'true';
+const RAW_HOST = String(process.env.SMTP_HOST || 'smtp.zoho.com').trim();
+// Zoho's documented SMTP host is smtp.zoho.com. Normalize a stale regional
+// value back to the supported host instead of sending requests to an endpoint
+// that can time out in the hosted runtime.
+const SMTP_HOST = /^smtp\.zoho\.in$/i.test(RAW_HOST) ? 'smtp.zoho.com' : RAW_HOST;
 const SMTP_USER = String(process.env.SMTP_USER || '').trim();
 const SMTP_PASS = String(process.env.SMTP_PASS || process.env.SMTP_PASSWORD || '').trim();
 const SMTP_FROM = String(process.env.SMTP_FROM || process.env.ZOHO_FROM || SMTP_USER || '').trim();
-const SMTP_TIMEOUT_MS = Math.max(5000, Number(process.env.SMTP_TIMEOUT_MS || 15000));
+const SMTP_TIMEOUT_MS = Math.max(5000, Number(process.env.SMTP_TIMEOUT_MS || 12000));
 
 const configured = Boolean(SMTP_USER && SMTP_PASS && SMTP_FROM);
-let transporter;
+const transporters = new Map();
 
-function getTransporter() {
+function getTransporter(port) {
   if (!configured) return null;
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
+  if (!transporters.has(port)) {
+    const secure = port === 465;
+    transporters.set(port, nodemailer.createTransport({
       host: SMTP_HOST,
-      port: SMTP_PORT,
-      secure: SMTP_SECURE,
+      port,
+      secure,
       auth: { user: SMTP_USER, pass: SMTP_PASS },
       connectionTimeout: SMTP_TIMEOUT_MS,
       greetingTimeout: SMTP_TIMEOUT_MS,
       socketTimeout: SMTP_TIMEOUT_MS,
-    });
+    }));
   }
-  return transporter;
+  return transporters.get(port);
 }
 
 function normalizeSingleRecipient(value) {
@@ -40,19 +40,33 @@ function normalizeSingleRecipient(value) {
 }
 
 async function sendSmtp({ to, subject, content }) {
-  const mail = getTransporter();
-  if (!mail) throw new Error('SMTP sender is not configured. Set SMTP_USER, SMTP_PASS and SMTP_FROM.');
+  if (!configured) throw new Error('SMTP sender is not configured. Set SMTP_USER, SMTP_PASS and SMTP_FROM.');
   const recipient = normalizeSingleRecipient(to);
-  const info = await mail.sendMail({
-    from: { name: DISPLAY_NAME, address: SMTP_FROM },
-    to: recipient,
-    cc: undefined,
-    bcc: undefined,
-    replyTo: undefined,
-    subject: String(subject || '').trim(),
-    html: String(content || ''),
-  });
-  console.log(`MAIL SEND ACCEPTED provider=smtp host=${SMTP_HOST} from=${DISPLAY_NAME} <${SMTP_FROM}> to=${recipient} messageId=${info.messageId || 'unknown'}`);
+  let lastError = null;
+
+  // Same Zoho SMTP provider only. Try the two documented outgoing ports; do
+  // not switch to another provider or another delivery API.
+  for (const port of [465, 587]) {
+    try {
+      const mail = getTransporter(port);
+      const info = await mail.sendMail({
+        from: { name: DISPLAY_NAME, address: SMTP_FROM },
+        to: recipient,
+        cc: undefined,
+        bcc: undefined,
+        replyTo: undefined,
+        subject: String(subject || '').trim(),
+        html: String(content || ''),
+      });
+      console.log(`MAIL SEND ACCEPTED provider=smtp host=${SMTP_HOST} port=${port} from=${DISPLAY_NAME} <${SMTP_FROM}> to=${recipient} messageId=${info.messageId || 'unknown'}`);
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(`Zoho SMTP ${SMTP_HOST}:${port} unavailable: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+
+  throw new Error(`Zoho SMTP delivery failed on ports 465 and 587: ${lastError instanceof Error ? lastError.message : String(lastError || 'connection failed')}`);
 }
 
 export function installZohoDisplayNameMailBridge() {
@@ -96,6 +110,6 @@ export function installZohoDisplayNameMailBridge() {
   };
 
   globalThis.__indoVerificationDisplayNameBridgeInstalled = true;
-  console.log(`Sender identity bridge ready: ${DISPLAY_NAME} <${SMTP_FROM}> via ${SMTP_HOST}:${SMTP_PORT} (SMTP-only)`);
+  console.log(`Sender identity bridge ready: ${DISPLAY_NAME} <${SMTP_FROM}> via ${SMTP_HOST} (SMTP-only; ports 465/587)`);
   return true;
 }
