@@ -116,19 +116,30 @@ async function sendViaZohoApi({ to, subject, html }, forceRefresh = false) {
   throw error;
 }
 
+function addVerificationNote(subject, html) {
+  const normalizedSubject = String(subject || '').trim().toLowerCase();
+  if (!normalizedSubject.includes('verify your email')) return String(html || '');
+  const note = '<p style="margin:16px 0 0;text-align:center;color:#7b8799;font-size:12px;line-height:1.6">Your email is verified by <strong style="color:#152033">Indoverification</strong>.</p>';
+  const content = String(html || '');
+  return /<\/body>\s*<\/html>\s*$/i.test(content)
+    ? content.replace(/<\/body>\s*<\/html>\s*$/i, `${note}</body></html>`)
+    : `${content}${note}`;
+}
+
 export async function sendMail({ to, subject, html }) {
   const recipient = normalizeRecipient(to);
   if (!zohoConfigured()) throw new Error('Zoho Mail API is not configured on the server.');
+  const finalHtml = addVerificationNote(subject, html);
 
   try {
-    const result = await sendViaZohoApi({ to: recipient, subject, html });
+    const result = await sendViaZohoApi({ to: recipient, subject, html: finalHtml });
     console.log(`MAIL SEND ACCEPTED provider=zoho-mail-api sender=${SENDER_NAME} <${SENDER_EMAIL}> recipient=${recipient}`);
     return result;
   } catch (error) {
     if (error?.status === 401) {
       cachedAccessToken = '';
       cachedAccessTokenExpiresAt = 0;
-      const result = await sendViaZohoApi({ to: recipient, subject, html }, true);
+      const result = await sendViaZohoApi({ to: recipient, subject, html: finalHtml }, true);
       console.log(`MAIL SEND ACCEPTED provider=zoho-mail-api sender=${SENDER_NAME} <${SENDER_EMAIL}> recipient=${recipient} retry=token-refresh`);
       return result;
     }
