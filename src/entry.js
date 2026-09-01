@@ -1,6 +1,7 @@
 // Railway runtime entrypoint.
-// The shared mail transport stays app-independent: every app gets its own
-// template/branding, while the sender identity remains IndoVerification.
+// Keep the sender identity global and independent from all app templates.
+// SMTP is tried first so the historical display name is preserved. If the
+// hosted runtime cannot reach SMTP, the Zoho Mail API remains the fallback.
 import { installZohoDisplayNameMailBridge } from './smtp-display-name-fallback.js';
 
 installZohoDisplayNameMailBridge();
