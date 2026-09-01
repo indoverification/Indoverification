@@ -7,9 +7,16 @@ const CLIENT_SECRET = String(process.env.ZOHO_CLIENT_SECRET || '').trim();
 const REFRESH_TOKEN = String(process.env.ZOHO_REFRESH_TOKEN || process.env.ZOHO_OAUTH_REFRESH_TOKEN || '').trim();
 const ACCOUNT_ID = String(process.env.ZOHO_ACCOUNT_ID || '').trim();
 const DISPLAY_NAME = String(process.env.ZOHO_FROM_DISPLAY_NAME || 'IndoVerification').trim() || 'IndoVerification';
+const RAW_FROM = String(process.env.ZOHO_FROM || '').trim();
+
+function emailAddress(value) {
+  const match = String(value || '').match(/<\s*([^<>\s]+@[^<>\s]+)\s*>/i);
+  if (match?.[1]) return match[1].trim().toLowerCase();
+  return String(value || '').trim().toLowerCase();
+}
 
 async function getAccessToken() {
-  if (!CLIENT_ID || !CLIENT_SECRET || !REFRESH_TOKEN || !ACCOUNT_ID) {
+  if (!CLIENT_ID || !CLIENT_SECRET || !REFRESH_TOKEN || !ACCOUNT_ID || !RAW_FROM) {
     throw new Error('Zoho sender identity configuration is incomplete.');
   }
   const params = new URLSearchParams({
@@ -28,6 +35,11 @@ async function getAccessToken() {
 
 export async function ensureZohoSenderDisplayName() {
   const token = await getAccessToken();
+  const senderAddress = emailAddress(RAW_FROM);
+  if (!senderAddress.includes('@')) throw new Error('ZOHO_FROM must contain a valid sender email address.');
+
+  // Documented Zoho Mail API contract for updating Send Mail As display name.
+  // Requires ZohoMail.accounts.UPDATE (or ZohoMail.accounts.ALL) on the OAuth token.
   const response = await fetch(`${ZOHO_MAIL_API_URL}/api/accounts/${encodeURIComponent(ACCOUNT_ID)}`, {
     method: 'PUT',
     headers: {
@@ -35,12 +47,23 @@ export async function ensureZohoSenderDisplayName() {
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    body: JSON.stringify({ mode: 'updateDisplayName', displayName: DISPLAY_NAME }),
+    body: JSON.stringify({
+      mode: 'addsendmaildetails',
+      sendMailDetails: [{
+        fromAddress: senderAddress,
+        displayName: DISPLAY_NAME,
+        mode: 'extmailbox',
+      }],
+    }),
   });
   const body = await response.json().catch(() => ({}));
   const apiCode = body?.status?.code;
   if (!response.ok || (apiCode !== undefined && Number(apiCode) !== 200)) {
-    throw new Error(body?.status?.description || body?.message || `Zoho display-name update failed (${response.status})`);
+    const description = body?.status?.description || body?.message || `Zoho display-name update failed (${response.status})`;
+    if (response.status === 401) {
+      throw new Error(`${description}. Zoho OAuth token requires ZohoMail.accounts.UPDATE (or ZohoMail.accounts.ALL).`);
+    }
+    throw new Error(description);
   }
-  console.log(`Zoho sender display name enforced: ${DISPLAY_NAME}`);
+  console.log(`Zoho sender display name configured globally: ${DISPLAY_NAME}`);
 }
