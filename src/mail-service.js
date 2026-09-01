@@ -8,7 +8,9 @@ const ZOHO_ACCOUNTS_URL = String(process.env.ZOHO_ACCOUNTS_URL || 'https://accou
 const ZOHO_MAIL_API_URL = String(process.env.ZOHO_MAIL_API_URL || 'https://mail.zoho.in').trim().replace(/\/$/, '');
 const ZOHO_CLIENT_ID = String(process.env.ZOHO_CLIENT_ID || '').trim();
 const ZOHO_CLIENT_SECRET = String(process.env.ZOHO_CLIENT_SECRET || '').trim();
-const ZOHO_REFRESH_TOKEN = String(process.env.ZOHO_REFRESH_TOKEN || '').trim();
+// Accept the legacy Railway variable name as a compatibility fallback. The
+// canonical variable remains ZOHO_REFRESH_TOKEN.
+const ZOHO_REFRESH_TOKEN = String(process.env.ZOHO_REFRESH_TOKEN || process.env.ZOHO_OAUTH_REFRESH_TOKEN || '').trim();
 const ZOHO_ACCOUNT_ID = String(process.env.ZOHO_ACCOUNT_ID || '').trim();
 const REQUEST_TIMEOUT_MS = Math.max(5000, Number(process.env.MAIL_API_TIMEOUT_MS || 15000));
 
