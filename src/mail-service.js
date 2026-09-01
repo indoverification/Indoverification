@@ -14,7 +14,6 @@ const ZOHO_ACCOUNT_ID = String(process.env.ZOHO_ACCOUNT_ID || '').trim();
 
 let cachedAccessToken = '';
 let cachedAccessTokenExpiresAt = 0;
-let cachedApiDomain = '';
 let refreshPromise = null;
 
 function normalizeRecipient(value) {
@@ -72,12 +71,6 @@ async function refreshAccessToken() {
     const expiresIn = Math.max(60, Number(body?.expires_in || 3600));
     cachedAccessToken = accessToken;
     cachedAccessTokenExpiresAt = Date.now() + (expiresIn - 60) * 1000;
-
-    // Zoho may return the region-specific API domain. Prefer it when present;
-    // otherwise keep the configured India endpoint.
-    const apiDomain = String(body?.api_domain || '').trim().replace(/\/$/, '');
-    if (apiDomain) cachedApiDomain = apiDomain;
-
     return cachedAccessToken;
   })().finally(() => { refreshPromise = null; });
 
@@ -91,8 +84,7 @@ async function getAccessToken(forceRefresh = false) {
 
 async function sendViaZohoApi({ to, subject, html }, forceRefresh = false) {
   const accessToken = await getAccessToken(forceRefresh);
-  const apiBase = cachedApiDomain || ZOHO_MAIL_API_URL;
-  const url = `${apiBase}/api/accounts/${encodeURIComponent(ZOHO_ACCOUNT_ID)}/messages`;
+  const url = `${ZOHO_MAIL_API_URL}/api/accounts/${encodeURIComponent(ZOHO_ACCOUNT_ID)}/messages`;
   const payload = {
     fromAddress: SENDER_EMAIL,
     toAddress: to,
@@ -112,9 +104,7 @@ async function sendViaZohoApi({ to, subject, html }, forceRefresh = false) {
   });
 
   const apiCode = Number(body?.status?.code || 0);
-  if (response.ok && (apiCode === 0 || apiCode === 200 || body?.status?.description === 'success')) {
-    return body;
-  }
+  if (response.ok && (apiCode === 0 || apiCode === 200 || body?.status?.description === 'success')) return body;
 
   const error = new Error(
     `Zoho Mail API delivery failed: ${body?.status?.description || body?.data?.errorMessage || body?.data?.errorCode || body?.message || body?.error || `HTTP ${response.status}`}`
@@ -132,12 +122,9 @@ export async function sendMail({ to, subject, html }) {
     console.log(`MAIL SEND ACCEPTED provider=zoho-mail-api sender=${SENDER_NAME} <${SENDER_EMAIL}> recipient=${recipient}`);
     return result;
   } catch (error) {
-    // Only retry when the access token is rejected. This avoids duplicate sends
-    // while still recovering cleanly from an expired/revoked access token.
     if (error?.status === 401) {
       cachedAccessToken = '';
       cachedAccessTokenExpiresAt = 0;
-      cachedApiDomain = '';
       const result = await sendViaZohoApi({ to: recipient, subject, html }, true);
       console.log(`MAIL SEND ACCEPTED provider=zoho-mail-api sender=${SENDER_NAME} <${SENDER_EMAIL}> recipient=${recipient} retry=token-refresh`);
       return result;
