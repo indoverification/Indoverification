@@ -1,21 +1,20 @@
-// One shared Zoho SMTP transport for every application.
+// One shared Zoho Mail API transport for every application.
 // App-specific branding/templates are supplied by the caller; this service owns
-// only the global sender identity and Zoho delivery credentials.
-
-import nodemailer from 'nodemailer';
+// only the global sender identity and Zoho authentication/delivery.
 
 const SENDER_NAME = 'Indoverification';
 const SENDER_EMAIL = 'indogroup@zohomail.in';
-const SMTP_HOST = String(process.env.SMTP_HOST || 'smtp.zoho.com').trim();
-const SMTP_PORT = Number(process.env.SMTP_PORT || 465);
-const SMTP_USER = String(process.env.SMTP_USER || SENDER_EMAIL).trim();
-const SMTP_PASSWORD = String(process.env.SMTP_PASS || process.env.SMTP_PASSWORD || '').trim();
-const SMTP_TIMEOUT_MS = Math.max(
-  5000,
-  Number(process.env.SMTP_TIMEOUT_MS || process.env.MAIL_API_TIMEOUT_MS || 15000),
-);
+const ZOHO_ACCOUNTS_URL = String(process.env.ZOHO_ACCOUNTS_URL || 'https://accounts.zoho.in').trim().replace(/\/$/, '');
+const ZOHO_MAIL_API_URL = String(process.env.ZOHO_MAIL_API_URL || 'https://mail.zoho.in').trim().replace(/\/$/, '');
+const ZOHO_CLIENT_ID = String(process.env.ZOHO_CLIENT_ID || '').trim();
+const ZOHO_CLIENT_SECRET = String(process.env.ZOHO_CLIENT_SECRET || '').trim();
+const ZOHO_REFRESH_TOKEN = String(process.env.ZOHO_REFRESH_TOKEN || process.env.ZOHO_OAUTH_REFRESH_TOKEN || '').trim();
+const ZOHO_ACCOUNT_ID = String(process.env.ZOHO_ACCOUNT_ID || '').trim();
+const REQUEST_TIMEOUT_MS = Math.max(5000, Number(process.env.MAIL_API_TIMEOUT_MS || 15000));
 
-let transporter;
+let cachedAccessToken = '';
+let cachedAccessTokenExpiresAt = 0;
+let refreshPromise = null;
 
 function normalizeRecipient(value) {
   const recipient = String(value || '').normalize('NFKC').trim().toLowerCase();
@@ -27,54 +26,122 @@ function normalizeRecipient(value) {
 
 function assertConfigured() {
   const missing = [];
-  if (!SMTP_USER) missing.push('SMTP_USER');
-  if (!SMTP_PASSWORD) missing.push('SMTP_PASS');
-  if (!SMTP_HOST) missing.push('SMTP_HOST');
-  if (!SMTP_PORT) missing.push('SMTP_PORT');
-  if (missing.length) throw new Error(`Zoho SMTP is not configured. Missing: ${missing.join(', ')}.`);
+  if (!ZOHO_CLIENT_ID) missing.push('ZOHO_CLIENT_ID');
+  if (!ZOHO_CLIENT_SECRET) missing.push('ZOHO_CLIENT_SECRET');
+  if (!ZOHO_REFRESH_TOKEN) missing.push('ZOHO_REFRESH_TOKEN');
+  if (!ZOHO_ACCOUNT_ID) missing.push('ZOHO_ACCOUNT_ID');
+  if (missing.length) throw new Error(`Zoho Mail API is not configured. Missing: ${missing.join(', ')}.`);
 }
 
-function getTransporter() {
-  assertConfigured();
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: SMTP_PORT,
-      secure: SMTP_PORT === 465,
-      requireTLS: SMTP_PORT === 587,
-      auth: {
-        user: SMTP_USER,
-        pass: SMTP_PASSWORD,
-      },
-      connectionTimeout: SMTP_TIMEOUT_MS,
-      greetingTimeout: SMTP_TIMEOUT_MS,
-      socketTimeout: SMTP_TIMEOUT_MS,
-      tls: {
-        servername: SMTP_HOST,
-      },
-    });
+async function fetchJson(url, init = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    const text = await response.text();
+    let body = {};
+    try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
+    return { response, body };
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error(`Zoho Mail API request timed out after ${REQUEST_TIMEOUT_MS}ms.`);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return transporter;
+}
+
+async function refreshAccessToken() {
+  assertConfigured();
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    const params = new URLSearchParams({
+      refresh_token: ZOHO_REFRESH_TOKEN,
+      client_id: ZOHO_CLIENT_ID,
+      client_secret: ZOHO_CLIENT_SECRET,
+      grant_type: 'refresh_token',
+    });
+
+    const { response, body } = await fetchJson(`${ZOHO_ACCOUNTS_URL}/oauth/v2/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+    });
+
+    const accessToken = String(body?.access_token || '').trim();
+    if (!response.ok || !accessToken) {
+      const description = body?.error || body?.error_description || body?.message || `HTTP ${response.status}`;
+      throw new Error(`Zoho OAuth token refresh failed: ${description}`);
+    }
+
+    const expiresIn = Math.max(60, Number(body?.expires_in || 3600));
+    cachedAccessToken = accessToken;
+    cachedAccessTokenExpiresAt = Date.now() + (expiresIn - 60) * 1000;
+    return cachedAccessToken;
+  })().finally(() => {
+    refreshPromise = null;
+  });
+
+  return refreshPromise;
+}
+
+async function getAccessToken(forceRefresh = false) {
+  if (!forceRefresh && cachedAccessToken && Date.now() < cachedAccessTokenExpiresAt) return cachedAccessToken;
+  return refreshAccessToken();
+}
+
+function extractZohoError(body, status) {
+  return body?.status?.description || body?.data?.errorMessage || body?.data?.errorCode || body?.message || body?.error || body?.error_description || `HTTP ${status}`;
+}
+
+async function sendViaZohoApi({ to, subject, html }, forceRefresh = false) {
+  const accessToken = await getAccessToken(forceRefresh);
+  const url = `${ZOHO_MAIL_API_URL}/api/accounts/${encodeURIComponent(ZOHO_ACCOUNT_ID)}/messages`;
+  const payload = {
+    fromAddress: SENDER_EMAIL,
+    toAddress: to,
+    subject: String(subject || '').trim(),
+    content: String(html || ''),
+  };
+
+  const { response, body } = await fetchJson(url, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Zoho-oauthtoken ${accessToken}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const apiCode = Number(body?.status?.code || 0);
+  if (response.ok && (apiCode === 0 || apiCode === 200 || body?.status?.description === 'success')) return body;
+
+  const message = extractZohoError(body, response.status);
+  const error = new Error(`Zoho Mail API delivery failed: ${message}`);
+  error.status = response.status;
+  error.zohoBody = body;
+  throw error;
 }
 
 export async function sendMail({ to, subject, html }) {
   const recipient = normalizeRecipient(to);
-  const mail = getTransporter();
+  assertConfigured();
 
-  const result = await mail.sendMail({
-    from: {
-      name: SENDER_NAME,
-      address: SENDER_EMAIL,
-    },
-    to: recipient,
-    subject: String(subject || '').trim(),
-    html: String(html || ''),
-  });
-
-  console.log(
-    `MAIL SEND ACCEPTED provider=zoho-smtp sender=${SENDER_NAME} <${SENDER_EMAIL}> recipient=${recipient} messageId=${result.messageId}`,
-  );
-  return result;
+  try {
+    const result = await sendViaZohoApi({ to: recipient, subject, html });
+    console.log(`MAIL SEND ACCEPTED provider=zoho-mail-api sender=${SENDER_NAME} <${SENDER_EMAIL}> recipient=${recipient}`);
+    return result;
+  } catch (error) {
+    if (error?.status === 401 || /INVALID_TICKET|invalid.*token|token.*expired/i.test(String(error?.message || ''))) {
+      cachedAccessToken = '';
+      cachedAccessTokenExpiresAt = 0;
+      const result = await sendViaZohoApi({ to: recipient, subject, html }, true);
+      console.log(`MAIL SEND ACCEPTED provider=zoho-mail-api sender=${SENDER_NAME} <${SENDER_EMAIL}> recipient=${recipient} retry=token-refresh`);
+      return result;
+    }
+    throw error;
+  }
 }
 
 export const SHARED_SENDER = Object.freeze({ name: SENDER_NAME, email: SENDER_EMAIL });
