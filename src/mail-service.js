@@ -7,12 +7,12 @@ import nodemailer from 'nodemailer';
 const SENDER_NAME = 'Indoverification';
 const SENDER_EMAIL = 'indogroup@zohomail.in';
 const SMTP_HOST = String(process.env.SMTP_HOST || 'smtp.zoho.com').trim();
-const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_PORT = Number(process.env.SMTP_PORT || 465);
 const SMTP_USER = String(process.env.SMTP_USER || SENDER_EMAIL).trim();
 const SMTP_PASSWORD = String(process.env.SMTP_PASS || process.env.SMTP_PASSWORD || '').trim();
 const SMTP_TIMEOUT_MS = Math.max(
   5000,
-  Number(process.env.SMTP_TIMEOUT_MS || process.env.MAIL_API_TIMEOUT_MS || 30000),
+  Number(process.env.SMTP_TIMEOUT_MS || process.env.MAIL_API_TIMEOUT_MS || 15000),
 );
 
 let transporter;
