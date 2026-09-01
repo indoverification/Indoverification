@@ -9,7 +9,8 @@
     "test:app-request": "node src/app-request.test.js",
     "test:app-email": "node src/app-email-isolation.test.js",
     "test:multi-app-regression": "node src/multi-app-regression.test.js",
-    "test:multi-app-startup": "node src/multi-app-startup-check.test.js"
+    "test:multi-app-startup": "node src/multi-app-startup-check.test.js",
+    "test:db-isolation": "node src/db-isolation-contract.test.js"
   },
   "engines": {"node": ">=20"},
   "dependencies": {
