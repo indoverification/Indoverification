@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import pg from 'pg';
 import 'dotenv/config';
 import { getAppConfig, listApps, DEFAULT_APP_ID, appRoot } from './app-registry.js';
-import { resolveAppContext, APP_ID_HEADER, LEGACY_APP_HEADER } from './app-request.js';
+import { resolveAppContext, appIdForOrigin, APP_ID_HEADER, LEGACY_APP_HEADER } from './app-request.js';
 
 const { Pool } = pg;
 const PORT = Number(process.env.PORT || 10000);
@@ -40,17 +40,21 @@ function sendJson(res, status, body) {
 }
 
 function appFromRequest(req, body = {}) {
-  const context = resolveAppContext({ body, headers: req.headers, origin: req.headers.origin });
-  return context;
+  return resolveAppContext({ body, headers: req.headers, origin: req.headers.origin });
 }
 
 function setCors(res, req) {
   const origin = String(req.headers.origin || '').trim();
-  const appHeader = String(req.headers[APP_ID_HEADER] || req.headers[LEGACY_APP_HEADER] || DEFAULT_APP_ID).trim().toLowerCase();
+  let appId = String(req.headers[APP_ID_HEADER] || req.headers[LEGACY_APP_HEADER] || '').trim().toLowerCase();
+  if (!appId && origin) appId = appIdForOrigin(origin);
+
   let allowOrigin = '';
-  try { allowOrigin = new URL(getAppConfig(appHeader).url).origin; } catch {}
+  if (appId) {
+    try { allowOrigin = new URL(getAppConfig(appId).url).origin; } catch {}
+  }
   if (origin && allowOrigin && origin === allowOrigin) res.setHeader('Access-Control-Allow-Origin', origin);
   else if (!origin && allowOrigin) res.setHeader('Access-Control-Allow-Origin', allowOrigin);
+
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Indo-App-Id, X-Indo-App-Name');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -235,10 +239,7 @@ async function verifyOtp(appId, challengeId, emailAddress, submittedOtp) {
   if (Date.now() > new Date(item.expires_at).getTime()) { await pool.query('DELETE FROM otp_codes WHERE otp_key=$1', [item.otp_key]); throw new Error('OTP expired.'); }
   if (item.attempts >= OTP_MAX_ATTEMPTS) { await pool.query('DELETE FROM otp_codes WHERE otp_key=$1', [item.otp_key]); throw new Error('Too many incorrect attempts.'); }
   const submitted = normalizeOtp(submittedOtp);
-  if (!/^\d{6}$/.test(submitted) || !sameHash(hash(submitted), item.code_hash)) {
-    await pool.query('UPDATE otp_codes SET attempts=attempts+1 WHERE otp_key=$1', [item.otp_key]);
-    throw new Error('Invalid OTP.');
-  }
+  if (!/^\d{6}$/.test(submitted) || !sameHash(hash(submitted), item.code_hash)) { await pool.query('UPDATE otp_codes SET attempts=attempts+1 WHERE otp_key=$1', [item.otp_key]); throw new Error('Invalid OTP.'); }
   await pool.query('DELETE FROM otp_codes WHERE otp_key=$1', [item.otp_key]);
   return item;
 }
@@ -268,7 +269,6 @@ async function main(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   try {
     if (url.pathname === '/health' && req.method === 'GET') return sendJson(res, 200, { ok: true, service: 'IndoVerification', role: 'multi-app OTP service', apps: listApps().map(({ id, name }) => ({ id, name })), emailConfigured: Boolean(ZOHO_CLIENT_ID && ZOHO_CLIENT_SECRET && ZOHO_REFRESH_TOKEN && ZOHO_ACCOUNT_ID && ZOHO_FROM), time: new Date().toISOString() });
-
     const body = await readBody(req);
     const context = appFromRequest(req, body);
     const appId = context.appId;
@@ -279,7 +279,6 @@ async function main(req, res) {
       const challengeId = await issueOtp(appId, e, 'signup');
       return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.', challengeId, appId });
     }
-
     if (url.pathname === '/api/auth/signup/verify-otp' && req.method === 'POST') {
       const e = email(body.email); if (!validEmail(e)) return sendJson(res, 400, { ok: false, error: 'Enter a valid email.' });
       const verification = await verifyOtp(appId, body.challengeId, e, body.otp);
@@ -287,19 +286,16 @@ async function main(req, res) {
       const name = String(body.name || '').trim(); const welcomeToken = await createSignupWelcomeToken(appId, e, name);
       return sendJson(res, 200, { ok: true, verified: true, email: e, name, welcomeToken, appId });
     }
-
     if (url.pathname === '/api/auth/signup/welcome' && req.method === 'POST') {
       const e = email(body.email); if (!validEmail(e)) return sendJson(res, 400, { ok: false, error: 'Enter a valid email.' });
       await consumeSignupWelcomeToken(appId, body.welcomeToken, e, String(body.name || '').trim());
       return sendJson(res, 200, { ok: true, welcomeSent: true, appId });
     }
-
     if (url.pathname === '/api/auth/login/request-otp' && req.method === 'POST') {
       const e = email(body.email); if (!validEmail(e)) return sendJson(res, 400, { ok: false, error: 'Enter a valid email.' });
       const challengeId = await issueOtp(appId, e, 'login');
       return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.', challengeId, appId });
     }
-
     if (url.pathname === '/api/auth/login/verify-otp' && req.method === 'POST') {
       const e = email(body.email); if (!validEmail(e)) return sendJson(res, 400, { ok: false, error: 'Enter a valid email.' });
       const verification = await verifyOtp(appId, body.challengeId, e, body.otp);
@@ -308,7 +304,6 @@ async function main(req, res) {
       try { await mailWelcomeBack(appId, e, String(body.name || '').trim()); } catch (error) { welcomeSent = false; console.error('Welcome-back email failed:', error instanceof Error ? error.message : error); }
       return sendJson(res, 200, { ok: true, verified: true, email: e, welcomeSent, appId });
     }
-
     if (url.pathname === '/api/auth/resend-otp' && req.method === 'POST') {
       const e = email(body.email); const purpose = String(body.purpose || 'signup');
       if (!validEmail(e)) return sendJson(res, 400, { ok: false, error: 'Enter a valid email.' });
@@ -316,7 +311,6 @@ async function main(req, res) {
       const challengeId = await issueOtp(appId, e, purpose);
       return sendJson(res, 200, { ok: true, message: 'OTP resent.', challengeId, appId });
     }
-
     return sendJson(res, 404, { ok: false, error: 'Not found' });
   } catch (error) {
     console.error('REQUEST ERROR:', error);
