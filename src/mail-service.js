@@ -11,7 +11,10 @@ const SMTP_PORT = Math.max(1, Number(process.env.SMTP_PORT || 465));
 const SMTP_USER = String(process.env.SMTP_USER || SENDER_EMAIL).trim();
 const SMTP_PASSWORD = String(process.env.SMTP_PASS || process.env.SMTP_PASSWORD || '').trim();
 const SMTP_FROM = String(process.env.SMTP_FROM || SENDER_EMAIL).trim();
-const SMTP_TIMEOUT_MS = Math.max(5000, Number(process.env.SMTP_TIMEOUT_MS || 15000));
+// Railway/hosted runtimes can block or delay outbound SMTP. Keep this leg short
+// so the shared Zoho API fallback can take over without making the app appear stuck.
+const SMTP_TIMEOUT_MS = Math.max(5000, Number(process.env.SMTP_TIMEOUT_MS || 7000));
+const MAIL_API_TIMEOUT_MS = Math.max(5000, Number(process.env.MAIL_API_TIMEOUT_MS || 15000));
 
 const ZOHO_ACCOUNTS_URL = String(process.env.ZOHO_ACCOUNTS_URL || 'https://accounts.zoho.in').trim().replace(/\/$/, '');
 const ZOHO_MAIL_API_URL = String(process.env.ZOHO_MAIL_API_URL || 'https://mail.zoho.in').trim().replace(/\/$/, '');
@@ -19,7 +22,6 @@ const ZOHO_CLIENT_ID = String(process.env.ZOHO_CLIENT_ID || '').trim();
 const ZOHO_CLIENT_SECRET = String(process.env.ZOHO_CLIENT_SECRET || '').trim();
 const ZOHO_REFRESH_TOKEN = String(process.env.ZOHO_REFRESH_TOKEN || process.env.ZOHO_OAUTH_REFRESH_TOKEN || '').trim();
 const ZOHO_ACCOUNT_ID = String(process.env.ZOHO_ACCOUNT_ID || '').trim();
-const MAIL_API_TIMEOUT_MS = Math.max(5000, Number(process.env.MAIL_API_TIMEOUT_MS || 15000));
 
 let transporter = null;
 let cachedAccessToken = '';
