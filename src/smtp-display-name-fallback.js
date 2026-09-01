@@ -10,7 +10,8 @@ const RAW_HOST = String(process.env.SMTP_HOST || 'smtp.zoho.com').trim();
 const SMTP_HOST = /^smtp\.zoho\.in$/i.test(RAW_HOST) ? 'smtp.zoho.com' : RAW_HOST;
 const SMTP_USER = String(process.env.SMTP_USER || '').trim();
 const SMTP_PASS = String(process.env.SMTP_PASS || process.env.SMTP_PASSWORD || '').trim();
-const SMTP_FROM = String(process.env.SMTP_FROM || process.env.ZOHO_FROM || SMTP_USER || '').trim();
+const RAW_FROM = String(process.env.SMTP_FROM || process.env.ZOHO_FROM || SMTP_USER || '').trim();
+const SMTP_FROM = (RAW_FROM.match(/<\s*([^<>\s]+@[^<>\s]+)\s*>/)?.[1] || RAW_FROM).trim().toLowerCase();
 const SMTP_TIMEOUT_MS = Math.max(5000, Number(process.env.SMTP_TIMEOUT_MS || 12000));
 
 const configured = Boolean(SMTP_USER && SMTP_PASS && SMTP_FROM);
