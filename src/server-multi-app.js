@@ -117,7 +117,7 @@ async function mailOtp(appId, to, code, kind) {
   const name = brand.branding.name || getAppConfig(appId).name;
   const color = brand.branding.primaryColor || '#2563EB';
   const isSignup = kind === 'signup';
-  const body = `<h1 style="margin:0 0 10px;font-size:26px">${isSignup ? 'Verify your email' : 'Login verification'}</h1><p style="margin:0;color:#526177;font-size:15px;line-height:1.7">${isSignup ? `Use this code to verify your email and create your ${escapeHtml(name)} account.` : `Use this code to securely complete your ${escapeHtml(name)} login.`}</p>${otpBox(code, color)}<p style="margin:0;text-align:center;color:#7b8799;font-size:13px;line-height:1.7">This OTP is valid for <strong style="color:${escapeHtml(color)}">${Math.round(OTP_TTL_MS / 60000)} minutes</strong>.</p>`;
+  const body = `<h1 style="margin:0 0 10px;font-size:26px;text-align:center">${isSignup ? 'Verify your email' : 'Login verification'}</h1><p style="margin:0;color:#526177;font-size:15px;line-height:1.7">${isSignup ? `Use this code to verify your email and create your ${escapeHtml(name)} account.` : `Use this code to securely complete your ${escapeHtml(name)} login.`}</p>${otpBox(code, color)}<p style="margin:0;text-align:center;color:#7b8799;font-size:13px;line-height:1.7">This OTP is valid for <strong style="color:${escapeHtml(color)}">${Math.round(OTP_TTL_MS / 60000)} minutes</strong>.</p>`;
   const content = emailShell(appId, { eyebrow: isSignup ? 'Secure account registration' : 'Secure login verification', body });
   await sendMail({ to, subject: `${name} • ${isSignup ? 'Verify your email' : 'Login verification code'}`, html: content });
 }
