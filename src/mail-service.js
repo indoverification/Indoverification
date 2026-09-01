@@ -17,6 +17,8 @@ const REQUEST_TIMEOUT_MS = Math.max(5000, Number(process.env.MAIL_API_TIMEOUT_MS
 let cachedAccessToken = '';
 let cachedAccessTokenExpiresAt = 0;
 let refreshPromise = null;
+let senderDisplayNameSyncPromise = null;
+let senderDisplayNameSynced = false;
 
 function normalizeRecipient(value) {
   const recipient = String(value || '').normalize('NFKC').trim().toLowerCase();
@@ -96,8 +98,55 @@ function extractZohoError(body, status) {
   return body?.status?.description || body?.data?.errorMessage || body?.data?.errorCode || body?.message || body?.error || body?.error_description || `HTTP ${status}`;
 }
 
+async function syncSenderDisplayName(accessToken) {
+  if (senderDisplayNameSynced) return;
+  if (senderDisplayNameSyncPromise) return senderDisplayNameSyncPromise;
+
+  senderDisplayNameSyncPromise = (async () => {
+    const url = `${ZOHO_MAIL_API_URL}/api/accounts/${encodeURIComponent(ZOHO_ACCOUNT_ID)}`;
+    const { response, body } = await fetchJson(url, {
+      method: 'PUT',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Zoho-oauthtoken ${accessToken}`,
+      },
+      body: JSON.stringify({ mode: 'updateDisplayName', displayName: SENDER_NAME }),
+    });
+
+    const apiCode = Number(body?.status?.code || 0);
+    if (response.ok && (apiCode === 0 || apiCode === 200 || body?.status?.description === 'success')) {
+      senderDisplayNameSynced = true;
+      console.log(`MAIL SENDER DISPLAY NAME synchronized sender=${SENDER_NAME} <${SENDER_EMAIL}>`);
+      return true;
+    }
+
+    const message = extractZohoError(body, response.status);
+    const error = new Error(`Zoho sender display-name synchronization failed: ${message}`);
+    error.status = response.status;
+    error.zohoBody = body;
+    throw error;
+  })().finally(() => {
+    senderDisplayNameSyncPromise = null;
+  });
+
+  return senderDisplayNameSyncPromise;
+}
+
+async function ensureSenderDisplayName(accessToken) {
+  if (senderDisplayNameSynced) return;
+  try {
+    await syncSenderDisplayName(accessToken);
+  } catch (error) {
+    // Do not break OTP delivery when the existing OAuth token lacks the
+    // accounts.UPDATE scope. The next mail still uses the fixed global sender.
+    console.warn(`MAIL SENDER DISPLAY NAME sync skipped: ${error instanceof Error ? error.message : error}`);
+  }
+}
+
 async function sendViaZohoApi({ to, subject, html }, forceRefresh = false) {
   const accessToken = await getAccessToken(forceRefresh);
+  await ensureSenderDisplayName(accessToken);
   const url = `${ZOHO_MAIL_API_URL}/api/accounts/${encodeURIComponent(ZOHO_ACCOUNT_ID)}/messages`;
   const payload = {
     fromAddress: SENDER_EMAIL,
@@ -141,6 +190,7 @@ export async function sendMail({ to, subject, html }) {
     if (error?.status === 401 || /INVALID_TICKET|invalid.*token|token.*expired/i.test(String(error?.message || ''))) {
       cachedAccessToken = '';
       cachedAccessTokenExpiresAt = 0;
+      senderDisplayNameSynced = false;
       const result = await sendViaZohoApi({ to: recipient, subject, html }, true);
       console.log(`MAIL SEND ACCEPTED provider=zoho-mail-api sender=${SENDER_NAME} <${SENDER_EMAIL}> recipient=${recipient} retry=token-refresh`);
       return result;
