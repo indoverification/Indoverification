@@ -6,4 +6,7 @@ const plainMatch = rawZohoFrom.match(/^["']?\s*([^<>\s]+@[^<>\s]+)\s*["']?$/i);
 if (angleMatch?.[1]) process.env.ZOHO_FROM = angleMatch[1].trim().toLowerCase();
 else if (plainMatch?.[1]) process.env.ZOHO_FROM = plainMatch[1].trim().toLowerCase();
 
+// Shared browser OTP API; no browser credentials are used.
+process.env.CORS_ORIGIN = '*';
+
 await import('./server-multi-app.js');
