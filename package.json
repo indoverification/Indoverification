@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/entry.js",
     "test:app-registry": "node src/app-registry.test.js",
-    "test:app-request": "node src/app-request.test.js"
+    "test:app-request": "node src/app-request.test.js",
+    "test:app-email": "node src/app-email-isolation.test.js"
   },
   "engines": {"node": ">=20"},
   "dependencies": {
