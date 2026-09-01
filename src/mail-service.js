@@ -119,7 +119,7 @@ async function sendViaZohoApi({ to, subject, html }, forceRefresh = false) {
 function addVerificationNote(subject, html) {
   const normalizedSubject = String(subject || '').trim().toLowerCase();
   if (!normalizedSubject.includes('verify your email')) return String(html || '');
-  const note = '<p style="margin:16px 0 0;text-align:center;color:#7b8799;font-size:12px;line-height:1.6">Your email is verified by <strong style="color:#152033">Indoverification</strong>.</p>';
+  const note = '<p style="margin:18px 0 0;text-align:center;color:#111111;font-size:18px;font-weight:800;line-height:1.6">Your email is verified by <strong style="color:#000000;font-weight:900">Indoverification</strong>.</p>';
   const content = String(html || '');
   return /<\/body>\s*<\/html>\s*$/i.test(content)
     ? content.replace(/<\/body>\s*<\/html>\s*$/i, `${note}</body></html>`)
