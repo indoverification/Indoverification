@@ -14,8 +14,15 @@ function validAppId(value) {
   return /^[a-z0-9][a-z0-9_-]{1,63}$/.test(value);
 }
 
+function originOf(urlValue) {
+  const value = String(urlValue || '').trim();
+  if (!value) return '';
+  try { return new URL(value).origin; } catch { return ''; }
+}
+
 function loadAppManifests() {
   const registry = Object.create(null);
+  const origins = new Map();
   if (!fs.existsSync(APPS_ROOT)) return registry;
 
   for (const entry of fs.readdirSync(APPS_ROOT, { withFileTypes: true })) {
@@ -36,10 +43,21 @@ function loadAppManifests() {
 
     if (normalizeAppId(manifest.id) !== appId || manifest.enabled === false) continue;
 
+    const url = String(manifest.url || '').trim();
+    const origin = originOf(url);
+    if (origin) {
+      const previous = origins.get(origin);
+      if (previous) {
+        console.error(`Duplicate app origin rejected: ${origin} (${previous} and ${appId})`);
+        continue;
+      }
+      origins.set(origin, appId);
+    }
+
     registry[appId] = Object.freeze({
       id: appId,
       name: String(manifest.name || appId).trim(),
-      url: String(manifest.url || '').trim(),
+      url,
       supportEmail: String(manifest.supportEmail || '').trim().toLowerCase(),
       templateRoot: String(manifest.templateRoot || appId).trim(),
       rootPath: path.join(APPS_ROOT, entry.name),
