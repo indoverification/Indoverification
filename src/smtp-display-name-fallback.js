@@ -2,52 +2,57 @@ import nodemailer from 'nodemailer';
 
 const DISPLAY_NAME = String(process.env.ZOHO_FROM_DISPLAY_NAME || 'IndoVerification').trim() || 'IndoVerification';
 const SMTP_HOST = String(process.env.SMTP_HOST || 'smtp.zoho.com').trim();
-const SMTP_PORT = Number(process.env.SMTP_PORT || 465);
-const SMTP_SECURE = String(process.env.SMTP_SECURE || (SMTP_PORT === 465 ? 'true' : 'false')).trim().toLowerCase() === 'true';
 const SMTP_USER = String(process.env.SMTP_USER || '').trim();
 const SMTP_PASS = String(process.env.SMTP_PASS || process.env.SMTP_PASSWORD || '').trim();
 const SMTP_FROM = String(process.env.SMTP_FROM || SMTP_USER || process.env.ZOHO_FROM || '').trim();
-const SMTP_TIMEOUT_MS = Math.max(5000, Number(process.env.SMTP_TIMEOUT_MS || 10000));
+const TIMEOUT_MS = Math.max(2500, Number(process.env.SMTP_TIMEOUT_MS || 5000));
 
 const configured = Boolean(SMTP_USER && SMTP_PASS && SMTP_FROM);
-let transporter;
+let installed = false;
+const transports = new Map();
 
-function getTransporter() {
-  if (!configured) return null;
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
+function getTransport(port, secure) {
+  const key = `${port}:${secure}`;
+  if (!transports.has(key)) {
+    transports.set(key, nodemailer.createTransport({
       host: SMTP_HOST,
-      port: SMTP_PORT,
-      secure: SMTP_SECURE,
+      port,
+      secure,
       auth: { user: SMTP_USER, pass: SMTP_PASS },
-      connectionTimeout: SMTP_TIMEOUT_MS,
-      greetingTimeout: SMTP_TIMEOUT_MS,
-      socketTimeout: SMTP_TIMEOUT_MS,
-    });
+      connectionTimeout: TIMEOUT_MS,
+      greetingTimeout: TIMEOUT_MS,
+      socketTimeout: TIMEOUT_MS,
+    }));
   }
-  return transporter;
+  return transports.get(key);
 }
 
 async function trySmtp({ to, subject, content }) {
-  const mail = getTransporter();
-  if (!mail) return false;
-  try {
-    const info = await mail.sendMail({
-      from: { name: DISPLAY_NAME, address: SMTP_FROM },
-      to: String(to || '').trim(),
-      subject: String(subject || '').trim(),
-      html: String(content || ''),
-    });
-    console.log(`MAIL SEND ACCEPTED provider=smtp from=${DISPLAY_NAME} <${SMTP_FROM}> messageId=${info.messageId || 'unknown'}`);
-    return true;
-  } catch (error) {
-    console.warn(`SMTP transport unavailable; using Zoho API fallback: ${error instanceof Error ? error.message : error}`);
-    return false;
+  if (!configured) return false;
+  const attempts = [
+    [465, true],
+    [587, false],
+  ];
+
+  for (const [port, secure] of attempts) {
+    try {
+      const info = await getTransport(port, secure).sendMail({
+        from: { name: DISPLAY_NAME, address: SMTP_FROM },
+        to: String(to || '').trim(),
+        subject: String(subject || '').trim(),
+        html: String(content || ''),
+      });
+      console.log(`MAIL SEND ACCEPTED provider=smtp from=${DISPLAY_NAME} <${SMTP_FROM}> port=${port} messageId=${info.messageId || 'unknown'}`);
+      return true;
+    } catch (error) {
+      console.log(`SMTP port ${port} unavailable; trying next mail transport.`);
+    }
   }
+  return false;
 }
 
 export function installZohoDisplayNameMailBridge() {
-  if (!configured || globalThis.__indoVerificationDisplayNameBridgeInstalled) return false;
+  if (!configured || installed) return false;
   const originalFetch = globalThis.fetch;
   if (typeof originalFetch !== 'function') return false;
 
@@ -81,7 +86,7 @@ export function installZohoDisplayNameMailBridge() {
     return originalFetch(input, init);
   };
 
-  globalThis.__indoVerificationDisplayNameBridgeInstalled = true;
+  installed = true;
   console.log(`Sender identity bridge ready: ${DISPLAY_NAME} <${SMTP_FROM}> (SMTP primary, Zoho API fallback)`);
   return true;
 }
