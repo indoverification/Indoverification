@@ -5,8 +5,11 @@ const SENDER_NAME = 'Indoverification';
 const SENDER_EMAIL = String(process.env.ZOHO_FROM || 'indogroup@zohomail.in').trim().toLowerCase();
 
 const MAIL_API_TIMEOUT_MS = Math.max(5000, Number(process.env.MAIL_API_TIMEOUT_MS || 15000));
-const ZOHO_ACCOUNTS_URL = String(process.env.ZOHO_ACCOUNTS_URL || 'https://accounts.zoho.in').trim().replace(/\/$/, '');
-const ZOHO_MAIL_API_URL = String(process.env.ZOHO_MAIL_API_URL || 'https://mail.zoho.in').trim().replace(/\/$/, '');
+// Indoone/Indoverification currently uses Zoho's India data center.
+// Keep the Mail API host fixed so a stale Railway variable cannot route mail
+// requests to a generic/wrong Zoho host and produce HTTP 404 responses.
+const ZOHO_ACCOUNTS_URL = 'https://accounts.zoho.in';
+const ZOHO_MAIL_API_URL = 'https://mail.zoho.in';
 const ZOHO_CLIENT_ID = String(process.env.ZOHO_CLIENT_ID || '').trim();
 const ZOHO_CLIENT_SECRET = String(process.env.ZOHO_CLIENT_SECRET || '').trim();
 const ZOHO_REFRESH_TOKEN = String(process.env.ZOHO_REFRESH_TOKEN || process.env.ZOHO_OAUTH_REFRESH_TOKEN || '').trim();
