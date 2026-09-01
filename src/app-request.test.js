@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
-import { resolveAppContext, resolveAppId } from './app-request.js';
+import { resolveAppContext, resolveAppId, appIdForOrigin } from './app-request.js';
 
 assert.equal(resolveAppId({ body: { appId: 'indoone' } }), 'indoone');
 assert.equal(resolveAppId({ headers: { 'x-indo-app-id': 'indoone' } }), 'indoone');
 assert.equal(resolveAppId({ headers: { 'x-indo-app-name': 'indomark' } }), 'indomark');
 assert.equal(resolveAppId({}), 'indomark');
 assert.throws(() => resolveAppId({ body: { appId: 'not-registered' } }), /Unknown application/);
+
+assert.equal(appIdForOrigin('https://indooneteam.github.io'), 'indoone');
+assert.equal(appIdForOrigin('https://indomark.github.io'), 'indomark');
+assert.equal(appIdForOrigin('https://unknown.example'), '');
 
 assert.equal(
   resolveAppContext({ body: { appId: 'indoone' }, origin: 'https://indooneteam.github.io' }).appId,
