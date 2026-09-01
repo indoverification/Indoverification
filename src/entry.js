@@ -1,15 +1,10 @@
 // Railway runtime entrypoint.
-// Keep sender identity configuration global and independent from app templates.
-import { ensureZohoSenderDisplayName } from './zoho-sender-identity.js';
+// The sender identity is global and independent from all app templates.
+// When the existing Zoho SMTP + App Password variables are available, the
+// shared mail API calls are delivered through SMTP with a fixed display name.
+import { installSmtpMailBridge } from './smtp-mail-bridge.js';
 
-try {
-  await ensureZohoSenderDisplayName();
-} catch (error) {
-  // Mail delivery must not be taken offline just because a display-name
-  // update is unavailable for the current OAuth scope/account configuration.
-  // The shared sender address and app-specific templates continue to work.
-  console.warn('Zoho sender display-name enforcement skipped:', error instanceof Error ? error.message : error);
-}
+installSmtpMailBridge();
 
 // The compatibility server.js normalizes deployment environment values and
 // starts the isolated multi-app runtime. The legacy server-v2.js is retained
