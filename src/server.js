@@ -36,7 +36,7 @@ const pool = new Pool({
 });
 
 let tablesReadyPromise;
-let firebaseAuth;
+const firebaseAuthByApp = new Map();
 
 function sendJson(res, status, body) {
   res.statusCode = status;
@@ -100,25 +100,33 @@ async function ensureRecoveryTables() {
   return tablesReadyPromise;
 }
 
-function getFirebaseAuth() {
-  if (firebaseAuth) return firebaseAuth;
-
-  const projectId = String(process.env.FIREBASE_PROJECT_ID || '').trim();
-  const clientEmail = String(process.env.FIREBASE_CLIENT_EMAIL || '').trim();
-  const privateKey = String(process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
-
-  if (!projectId || !clientEmail || !privateKey) {
-    throw new Error('Firebase Admin credentials are not configured on the recovery server.');
+function getFirebaseAuth(appId = 'indoone') {
+  const normalizedAppId = String(appId || '').trim().toLowerCase();
+  if (normalizedAppId !== 'indoone') {
+    throw new Error('Firebase Admin recovery is not configured for this app.');
   }
 
-  const app = getApps().length
-    ? getApps()[0]
-    : initializeApp({
-        credential: cert({ projectId, clientEmail, privateKey })
-      });
+  if (firebaseAuthByApp.has(normalizedAppId)) {
+    return firebaseAuthByApp.get(normalizedAppId);
+  }
 
-  firebaseAuth = getAuth(app);
-  return firebaseAuth;
+  const projectId = String(process.env.FIREBASE_INDOONE_PROJECT_ID || '').trim();
+  const clientEmail = String(process.env.FIREBASE_INDOONE_CLIENT_EMAIL || '').trim();
+  const privateKey = String(process.env.FIREBASE_INDOONE_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
+
+  if (!projectId || !clientEmail || !privateKey) {
+    throw new Error('Indoone Firebase Admin credentials are not configured on the recovery server.');
+  }
+
+  const appName = `indoone-recovery`;
+  const app = getApps().find(candidate => candidate.name === appName)
+    ?? initializeApp({
+        credential: cert({ projectId, clientEmail, privateKey })
+      }, appName);
+
+  const auth = getAuth(app);
+  firebaseAuthByApp.set(normalizedAppId, auth);
+  return auth;
 }
 
 function renderForgotPasswordOtp(code) {
@@ -235,7 +243,7 @@ async function handleForgotPasswordRequest(req, res) {
       return true;
     }
 
-    const auth = getFirebaseAuth();
+    const auth = getFirebaseAuth(appId);
 
     if (url.pathname === '/api/auth/forgot-password/request-otp') {
       try {
