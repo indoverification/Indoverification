@@ -47,7 +47,13 @@ function setCors(res, req) {
   if (appId) {
     try { allowOrigin = new URL(getAppConfig(appId).url).origin; } catch {}
   }
-  if (origin && allowOrigin && origin === allowOrigin) res.setHeader('Access-Control-Allow-Origin', origin);
+
+  // Android WebView/file-origin requests use the opaque `null` Origin. These
+  // requests are still explicitly scoped to an application by X-Indo-App-Id,
+  // so allow them without requiring a web origin match. No credentials are
+  // used by the OTP API, making the wildcard response appropriate here.
+  if (origin === 'null' && allowOrigin) res.setHeader('Access-Control-Allow-Origin', '*');
+  else if (origin && allowOrigin && origin === allowOrigin) res.setHeader('Access-Control-Allow-Origin', origin);
   else if (!origin && allowOrigin) res.setHeader('Access-Control-Allow-Origin', allowOrigin);
 
   res.setHeader('Vary', 'Origin');
