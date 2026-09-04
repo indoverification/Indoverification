@@ -4,7 +4,8 @@
     "signupOtp": "signup-otp",
     "loginOtp": "login-otp",
     "forgotPasswordOtp": "forgot-password-otp",
-    "welcome": "welcome"
+    "welcome": "welcome",
+    "welcomeBack": "welcome-back"
   },
   "branding": {
     "name": "Indoone",
