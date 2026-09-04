@@ -48,10 +48,6 @@ function setCors(res, req) {
     try { allowOrigin = new URL(getAppConfig(appId).url).origin; } catch {}
   }
 
-  // Android WebView/file-origin requests use the opaque `null` Origin. These
-  // requests are still explicitly scoped to an application by X-Indo-App-Id,
-  // so allow them without requiring a web origin match. No credentials are
-  // used by the OTP API, making the wildcard response appropriate here.
   if (origin === 'null' && allowOrigin) res.setHeader('Access-Control-Allow-Origin', '*');
   else if (origin && allowOrigin && origin === allowOrigin) res.setHeader('Access-Control-Allow-Origin', origin);
   else if (!origin && allowOrigin) res.setHeader('Access-Control-Allow-Origin', allowOrigin);
@@ -91,60 +87,76 @@ function escapeHtml(value) {
 function loadBrand(appId) {
   const root = appRoot(appId);
   const manifestPath = `${root}/email-templates.json`;
-  const fallback = { appId, templates: { signupOtp: 'signup-otp', loginOtp: 'login-otp', welcome: 'welcome' }, branding: { name: getAppConfig(appId).name, logoAsset: '', primaryColor: '#2563EB' } };
+  const fallback = {
+    appId,
+    templates: {
+      signupOtp: 'signup-otp',
+      loginOtp: 'login-otp',
+      welcome: 'welcome',
+      welcomeBack: 'welcome-back',
+    },
+    branding: {
+      name: getAppConfig(appId).name,
+      logoAsset: 'logo.svg',
+      primaryColor: '#2563EB',
+    },
+  };
   try {
     const value = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    return { ...fallback, ...value, branding: { ...fallback.branding, ...(value.branding || {}) } };
+    return { ...fallback, ...value, templates: { ...fallback.templates, ...(value.templates || {}) }, branding: { ...fallback.branding, ...(value.branding || {}) } };
   } catch {
     return fallback;
   }
 }
 
-function logoHtml(brand) {
-  const name = escapeHtml(brand.branding.name);
-  const color = escapeHtml(brand.branding.primaryColor || '#2563EB');
-  return `<div style="font-size:28px;line-height:1;font-weight:900;color:${color}">${name}</div>`;
-}
-
-function emailShell(appId, { eyebrow, body, welcome = false }) {
+function renderAppTemplate(appId, templateKey, variables = {}) {
   const brand = loadBrand(appId);
-  const name = escapeHtml(brand.branding.name);
-  const color = escapeHtml(brand.branding.primaryColor || '#2563EB');
-  const verificationNote = `<div style="margin-top:12px;font-size:18px;line-height:1.45;font-weight:800;color:#111827">Your email is verified by <strong>Indoverification</strong>.</div>`;
-  return `<!doctype html><html><body style="margin:0;padding:24px 12px;background:#f5f8fc;color:#152033;font-family:Arial,Helvetica,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr><td align="center"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:620px;background:#fff;border:1px solid #dce5f0;border-radius:16px;overflow:hidden"><tr><td align="center" style="padding:28px 20px 22px;border-bottom:1px solid #e7edf5">${logoHtml(brand)}<div style="margin-top:8px;color:#6b778c;font-size:12px">${escapeHtml(eyebrow)}</div>${verificationNote}</td></tr><tr><td style="padding:30px 26px">${body}</td></tr><tr><td align="center" style="padding:18px 20px;background:#f8fafc;border-top:1px solid #e7edf5;color:#7b8799;font-size:12px;line-height:1.7">Automated email from <strong style="color:${color}">${name}</strong>${welcome ? '' : '. Please do not share your OTP.'}</td></tr></table></td></tr></table></body></html>`;
-}
+  const templateName = String(brand.templates?.[templateKey] || '').trim();
+  if (!templateName) throw new Error(`Missing email template mapping: ${templateKey}`);
+  if (!/^[a-z0-9][a-z0-9_-]*$/i.test(templateName)) throw new Error('Invalid email template name.');
 
-function otpBox(code, color) {
-  return `<div style="margin:22px 0;padding:20px;background:#f7f9fc;border:1px solid #dce5f0;border-radius:13px;text-align:center"><div style="font-size:11px;color:#7b8799;letter-spacing:1.5px;text-transform:uppercase;font-weight:800">Your OTP code</div><div style="margin-top:10px;font-size:34px;letter-spacing:9px;font-weight:900;color:${escapeHtml(color)}">${escapeHtml(code)}</div></div>`;
+  const templatePath = `${appRoot(appId)}/templates/${templateName}.html`;
+  let html;
+  try {
+    html = fs.readFileSync(templatePath, 'utf8');
+  } catch {
+    throw new Error(`Missing email template file: ${templateName}.html`);
+  }
+
+  const values = {
+    appName: brand.branding.name || getAppConfig(appId).name,
+    primaryColor: brand.branding.primaryColor || '#2563EB',
+    minutes: Math.round(OTP_TTL_MS / 60000),
+    ...variables,
+  };
+  return html.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_, key) => escapeHtml(values[key] ?? ''));
 }
 
 async function mailOtp(appId, to, code, kind) {
   const brand = loadBrand(appId);
   const name = brand.branding.name || getAppConfig(appId).name;
-  const color = brand.branding.primaryColor || '#2563EB';
-  const isSignup = kind === 'signup';
-  const body = `<h1 style="margin:0 0 10px;font-size:26px;text-align:center">${isSignup ? 'Verify your email' : 'Login verification'}</h1><p style="margin:0;color:#526177;font-size:15px;line-height:1.7">${isSignup ? `Use this code to verify your email and create your ${escapeHtml(name)} account.` : `Use this code to securely complete your ${escapeHtml(name)} login.`}</p>${otpBox(code, color)}<p style="margin:0;text-align:center;color:#7b8799;font-size:13px;line-height:1.7">This OTP is valid for <strong style="color:${escapeHtml(color)}">${Math.round(OTP_TTL_MS / 60000)} minutes</strong>.</p>`;
-  const content = emailShell(appId, { eyebrow: isSignup ? 'Secure account registration' : 'Secure login verification', body });
-  await sendMail({ to, subject: `${name} • ${isSignup ? 'Verify your email' : 'Login verification code'}`, html: content });
+  const normalizedKind = String(kind || 'login');
+  const templateKey = normalizedKind === 'signup' ? 'signupOtp' : normalizedKind === 'forgotPassword' ? 'forgotPasswordOtp' : 'loginOtp';
+  const subject = normalizedKind === 'signup'
+    ? `${name} • Verify your email`
+    : normalizedKind === 'forgotPassword'
+      ? `${name} • Password reset verification code`
+      : `${name} • Login verification code`;
+  const content = renderAppTemplate(appId, templateKey, { code });
+  await sendMail({ to, subject, html: content });
 }
 
 async function mailNewAccountWelcome(appId, to, nameValue) {
   const brand = loadBrand(appId);
   const name = brand.branding.name || getAppConfig(appId).name;
-  const color = brand.branding.primaryColor || '#2563EB';
-  const safeName = escapeHtml(nameValue || 'there');
-  const body = `<h1 style="margin:0 0 10px;font-size:27px">Welcome to <span style="color:${escapeHtml(color)}">${escapeHtml(name)}</span>!</h1><p style="margin:0;color:#526177;font-size:16px;line-height:1.7">Hi ${safeName},</p><p style="margin:8px 0 20px;color:#65738a;font-size:15px;line-height:1.7">Your account has been created successfully.</p>`;
-  const content = emailShell(appId, { eyebrow: 'Account created successfully', body, welcome: true });
+  const content = renderAppTemplate(appId, 'welcome', { recipientName: nameValue || 'there' });
   await sendMail({ to, subject: `${name} • Welcome — your account is ready`, html: content });
 }
 
 async function mailWelcomeBack(appId, to, nameValue) {
   const brand = loadBrand(appId);
   const name = brand.branding.name || getAppConfig(appId).name;
-  const color = brand.branding.primaryColor || '#2563EB';
-  const safeName = escapeHtml(nameValue || 'there');
-  const body = `<h1 style="margin:0 0 10px;font-size:27px">Welcome <span style="color:${escapeHtml(color)}">back</span>!</h1><p style="margin:0;color:#526177;font-size:16px;line-height:1.7">Hi ${safeName}, you have successfully logged in to your ${escapeHtml(name)} account.</p>`;
-  const content = emailShell(appId, { eyebrow: 'Login successful', body, welcome: true });
+  const content = renderAppTemplate(appId, 'welcomeBack', { recipientName: nameValue || 'there' });
   await sendMail({ to, subject: `${name} • Welcome back — login successful`, html: content });
 }
 
