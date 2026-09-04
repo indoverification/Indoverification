@@ -3,7 +3,8 @@
   "templates": {
     "signupOtp": "signup-otp",
     "loginOtp": "login-otp",
-    "welcome": "welcome"
+    "welcome": "welcome",
+    "welcomeBack": "welcome-back"
   },
   "branding": {
     "name": "Indomark",
