@@ -311,6 +311,21 @@ async function main(req, res) {
       return sendJson(res, 200, { ok: true, message: 'OTP resent.', challengeId, appId });
     }
 
+    if (url.pathname === '/api/auth/forgot-password/request-otp' && req.method === 'POST') {
+      const e = email(body.email);
+      if (!validEmail(e)) return sendJson(res, 400, { ok: false, error: 'Enter a valid email.' });
+      const challengeId = await issueOtp(appId, e, 'forgotPassword');
+      return sendJson(res, 200, { ok: true, message: 'OTP sent to your email.', challengeId, appId });
+    }
+
+    if (url.pathname === '/api/auth/forgot-password/verify-otp' && req.method === 'POST') {
+      const e = email(body.email);
+      if (!validEmail(e)) return sendJson(res, 400, { ok: false, error: 'Enter a valid email.' });
+      const verification = await verifyOtp(appId, body.challengeId, e, body.otp);
+      if (verification.purpose !== 'forgotPassword') return sendJson(res, 400, { ok: false, error: 'OTP request mismatch.' });
+      return sendJson(res, 200, { ok: true, verified: true, email: e, appId });
+    }
+
     return sendJson(res, 404, { ok: false, error: 'Not found' });
   } catch (error) {
     console.error('REQUEST ERROR:', error);
